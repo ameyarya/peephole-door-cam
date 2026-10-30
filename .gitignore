@@ -1,0 +1,18 @@
+.DS_Store
+
+# Keep private info local: WiFi, API keys, home server addresses
+secrets.yaml
+secrets.h
+*.env
+.env*
+*.local.*
+private/
+
+# Photos/recordings of the real door or hallway
+media/
+*.HEIC
+*.heic
+
+# Build output
+.pio/
+build/
