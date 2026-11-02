@@ -126,10 +126,10 @@ realistic: `room_train*` files for training, any others for testing.
 Single-note bells are matched on pitch, sudden strike, steady fade and lack of
 overtones.
 
-**Status: unproven on a real mic.** In simulation it does well, but it detected
-none of 28 speaker and earbud playbacks through the XIAO's mic (some possibly
-silent or masked by a TV), and the cause isn't known yet. Check the mic responds
-to speech up close, then test with a real ring, before relying on it.
+**Status: works through the XIAO's mic on phone playback, not yet tried on a real
+bell.** Playing the recording from a phone a few inches from the mic set it off.
+Earlier plays from a monitor and earbuds didn't, and the reason wasn't established.
+A real ring at the door is still the test that counts.
 
 Limits to expect:
 - The scores only cover simulated conditions.

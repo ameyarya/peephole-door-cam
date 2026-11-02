@@ -34,7 +34,8 @@ Models are parametric OpenSCAD. Change values in the Customizer and re-export.
 - [x] Motion recorder (tested on a live stream)
 - [x] Chime trainer, including training from one recording (tested in simulation only)
 - [ ] ESP32-CAM build tested on a real board (compiles only)
-- [ ] Get the trained detector working through the XIAO's mic (no detections in playback tests so far)
+- [x] Trained detector works through the XIAO's mic on close-up phone playback
+- [ ] Test the detector on a real ring at the door
 - [ ] Chime detection running on the board itself
 - [ ] Home Assistant: TV popup + notifications
 - [ ] Frigate: recording + package detection
