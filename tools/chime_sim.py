@@ -210,7 +210,10 @@ def train(source, tone_hz, room_noise, seed=1, chimes=200, backgrounds=20) -> di
         positives.append(chime_clip(source, rng, room_noise, tone_hz, kind))
     negatives = [
         background_clip(kind, source, rng, room_noise, tone_hz)
+        # Very short beeps at the bell's own pitch look like a fast-dying bell. They're rare, so they don't set
+        # the threshold, or nothing would pass. evaluate() still measures them.
         for kind in FALSE_ALARM_KINDS
+        if kind != "beep at same pitch"
         for _ in range(backgrounds)
     ]
     negatives += [noise_bed(int(CLIP_S * RATE), rng, room_noise) for _ in range(20)]

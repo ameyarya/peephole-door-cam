@@ -36,8 +36,10 @@ Models are parametric OpenSCAD. Change values in the Customizer and re-export.
 - [ ] ESP32-CAM build tested on a real board (compiles only)
 - [x] Trained detector works through the XIAO's mic on close-up phone playback
 - [ ] Test the detector on a real ring at the door
-- [ ] Chime detection running on the board itself
-- [ ] Home Assistant: TV popup + notifications
+- [x] Doorbell detection running on the board, tested with rings near it
+- [x] Ring shows the camera on a Fire TV: full screen, or a small picture over a show
+- [ ] Ring on the TV: test with Netflix, the screensaver, and waking the TV from off
+- [ ] Phone notifications
 - [ ] Frigate: recording + package detection
 
 The door is fire-rated (20-minute viewer). The printed sleeve is for

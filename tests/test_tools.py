@@ -257,3 +257,47 @@ def test_musical_note_at_the_bell_pitch_is_rejected_by_its_overtones(sim_model):
     note_ = sum(np.sin(2 * np.pi * BELL_HZ * k * t) / k for k in range(1, 6)) * env
     audio = np.concatenate([np.zeros(RATE), 0.2 * note_, np.zeros(RATE)]) + rng.normal(0, 0.001, 5 * RATE)
     assert chime.detect(audio, model) == []
+
+
+# --- The board's detector should agree with the Python one ---
+
+CHECK = """
+#include <stdio.h>
+#include <vector>
+#include "chime_detector.h"
+int main(int argc, char **argv) {
+  FILE *f = fopen(argv[1], "rb");
+  fseek(f, 44, SEEK_SET);
+  static ChimeDetector d;
+  std::vector<int16_t> pcm(256);
+  size_t n;
+  while ((n = fread(pcm.data(), 2, pcm.size(), f)) > 0) {
+    float t;
+    if (d.feed(pcm.data(), n, &t)) printf("%.2f\\n", t);
+  }
+}
+"""
+
+
+@pytest.mark.skipif(not shutil.which("clang++"), reason="needs clang++")
+def test_board_detector_matches_python(tmp_path):
+    model = json.loads(chime.MODEL_PATH.read_text()) if chime.MODEL_PATH.exists() else None
+    if model is None or "strike" not in model:
+        pytest.skip("needs a trained single-note model")
+    header_dir = Path(__file__).parent.parent / "firmware" / "src"
+    src = tmp_path / "check.cpp"
+    src.write_text(CHECK)
+    binary = tmp_path / "check"
+    subprocess.run(["clang++", "-std=c++17", "-O1", f"-I{header_dir}", str(src), "-o", str(binary)], check=True)
+    test_rng = np.random.default_rng(11)
+    t = np.arange(int(2.4 * RATE)) / RATE
+    bell = 10 ** (-23 * t / 20) * np.sin(2 * np.pi * model["tones_hz"][0] * t) * 0.2
+    audio = np.concatenate([np.zeros(RATE), bell, np.zeros(4 * RATE), bell, speech_like(4.0), np.zeros(RATE)])
+    audio = audio + test_rng.normal(0, 0.001, len(audio))
+    wav = tmp_path / "a.wav"
+    chime.write_wav(wav, audio)
+    expected = chime.detect(chime.read_wav(wav), model)
+    got = [float(x) for x in subprocess.run([str(binary), str(wav)], capture_output=True, text=True, check=True).stdout.split()]
+    assert expected, "the Python detector should find the bell"
+    assert len(got) == len(expected)
+    assert np.allclose(got, expected, atol=0.1)

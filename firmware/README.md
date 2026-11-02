@@ -5,7 +5,7 @@ You can test everything before building the hardware. Three firmware builds:
 | Build | Board | Use |
 |---|---|---|
 | `xiao_sense_training` | XIAO ESP32S3 Sense | Video plus a mic audio stream, for doorbell training. **Don't leave this running at the door**: anyone on your network could listen to the room |
-| `xiao_sense` | XIAO ESP32S3 Sense | Video only |
+| `xiao_sense` | XIAO ESP32S3 Sense | Video, plus doorbell detection on the board. No audio leaves it |
 | `esp32cam` | AI-Thinker ESP32-CAM | Video only, it has no mic. Train on your computer's mic instead |
 
 ## 1. Flash the board
@@ -126,18 +126,48 @@ realistic: `room_train*` files for training, any others for testing.
 Single-note bells are matched on pitch, sudden strike, steady fade and lack of
 overtones.
 
-**Status: works through the XIAO's mic on phone playback, not yet tried on a real
-bell.** Playing the recording from a phone a few inches from the mic set it off.
-Earlier plays from a monitor and earbuds didn't, and the reason wasn't established.
-A real ring at the door is still the test that counts.
+**Status: works through the XIAO's mic on phone playback.** Rings near the board
+trigger it, but it isn't proven at the door's real distance. Earlier plays from a
+monitor and earbuds didn't trigger it, and the reason wasn't established.
 
 Limits to expect:
 - The scores only cover simulated conditions.
 - Simulated bell levels may be too loud. The XIAO's mic reads low, so a real bell
   may land below the range it does well in.
 - A neighbor's identical bell, heard loudly enough, will also trigger it.
+- A very short beep at the bell's pitch can look like a fast-dying bell. The
+  simulator's report shows how often.
 - A loud TV can hide the bell: detection falls off sharply when the noise is as
   loud as the bell.
+
+## 6. Put the model on the board and ring your TV
+Write the trained model into the firmware, then flash the `xiao_sense` build:
+
+```bash
+uv run tools/chime.py header
+```
+
+```bash
+pio run -e xiao_sense -t upload
+```
+
+On a ring the board POSTs to a URL you set once. It's kept on the board, because it
+may hold a secret. For the [Smart Home app](https://github.com/ameyarya/fire-tv-home-hub)
+it's `http://<TV>:8765/api/<secret>/doorbell?id=<camera id>`:
+
+```bash
+curl -X POST --data "<your URL>" http://door-cam.local/doorbell-url
+```
+
+To test the link without a bell:
+
+```bash
+curl -X POST http://door-cam.local/ring
+```
+
+If a ring doesn't trigger it, `/status` shows the numbers for the last bell-like
+sound under `last_strike` (numbers only, no audio). Compare them with the limits in
+`firmware/src/chime_model.h`. After an alert, the board ignores the bell for 5 seconds.
 
 ## Troubleshooting
 | Symptom | Likely cause |

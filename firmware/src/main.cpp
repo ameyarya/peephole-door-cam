@@ -6,12 +6,18 @@
 //   http://door-cam.local/control?framesize=vga&quality=12&vflip=1&hmirror=0
 //   http://door-cam.local:81/stream  MJPEG, up to 4 viewers at once
 //   http://door-cam.local:82/audio   16 kHz mono PCM, training builds only
+//   POST http://door-cam.local/doorbell-url  body: the URL to POST to on a ring
+//   POST http://door-cam.local/ring          acts as if the bell rang
+//
+// With CHIME_DETECT the board listens for the doorbell itself. No audio leaves it.
 //
 // There is no authentication, so keep this on a trusted network and never
 // port-forward it.
 
 #include <Arduino.h>
 #include <ESPmDNS.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
 
@@ -20,7 +26,7 @@
 #include "freertos/semphr.h"
 #include "esp_http_server.h"
 
-#ifdef AUDIO_STREAM
+#if defined(AUDIO_STREAM) || defined(CHIME_DETECT)
 #include "driver/i2s_pdm.h"
 #endif
 
@@ -81,6 +87,12 @@ static const int MAX_CAPTURE_FAILURES = 5;
 
 static volatile uint32_t framesSent = 0;
 static volatile int streamClients = 0;
+static volatile uint32_t rings = 0;
+
+#ifdef CHIME_DETECT
+#include "chime_detector.h"
+static ChimeDetector detector;
+#endif
 
 // One task grabs each camera frame and shares it with every viewer through
 // reference-counted copies in PSRAM, so a slow or dead connection can't hold up
@@ -233,16 +245,28 @@ static esp_err_t captureHandler(httpd_req_t *req) {
 
 static esp_err_t statusHandler(httpd_req_t *req) {
   sensor_t *s = esp_camera_sensor_get();
-  char json[256];
+  char json[512];
   snprintf(json, sizeof(json),
            "{\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"free_heap\":%u,"
-           "\"free_psram\":%u,\"frames_sent\":%lu,\"stream_clients\":%d,"
+           "\"free_psram\":%u,\"frames_sent\":%lu,\"stream_clients\":%d,\"rings\":%lu,"
            "\"framesize\":%d,\"quality\":%d}",
            WiFi.localIP().toString().c_str(), WiFi.RSSI(),
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (unsigned)ESP.getFreePsram(), (unsigned long)framesSent,
-           streamClients, s ? s->status.framesize : -1,
+           streamClients, (unsigned long)rings, s ? s->status.framesize : -1,
            s ? s->status.quality : -1);
+#ifdef CHIME_DETECT
+  // Numbers about the last bell-like sound. No audio.
+  ChimeDetector::Strike st;
+  if (detector.lastStrike(&st)) {
+    size_t used = strlen(json) - 1;
+    snprintf(json + used, sizeof(json) - used,
+             ",\"last_strike\":{\"age_s\":%.0f,\"level_db\":%.0f,\"purity\":%.2f,\"attack_db\":%.0f,"
+             "\"fade_db_s\":%.1f,\"wobble_db\":%.2f,\"overtone_db\":%.0f,\"early_drop_db\":%.1f,\"passed\":%s}}",
+             st.ageSeconds, st.level, st.purity, st.attack, st.fade, st.wobble, st.overtone, st.earlyDrop,
+             st.passed ? "true" : "false");
+  }
+#endif
   httpd_resp_set_type(req, "application/json");
   return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
@@ -331,7 +355,50 @@ static esp_err_t streamHandler(httpd_req_t *req) {
   return err;
 }
 
-#ifdef AUDIO_STREAM
+static Preferences prefs;
+static volatile bool ringPending = false;
+
+static esp_err_t ringHandler(httpd_req_t *req) {
+  ringPending = true;
+  return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t doorbellUrlHandler(httpd_req_t *req) {
+  char url[240];
+  if (req->content_len >= sizeof(url)) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "too long");
+    return ESP_FAIL;
+  }
+  int got = httpd_req_recv(req, url, req->content_len);
+  if (got < 0 || (size_t)got != req->content_len) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+    return ESP_FAIL;
+  }
+  url[got] = 0;
+  prefs.putString("doorbell_url", url);
+  return httpd_resp_sendstr(req, "ok");
+}
+
+// Runs outside the audio task, so a slow TV can't make it miss samples.
+static void sendRing() {
+  rings = rings + 1;
+  String url = prefs.getString("doorbell_url", "");
+  if (url.isEmpty()) {
+    Serial.println("Ring, but no doorbell URL is set");
+    return;
+  }
+  HTTPClient http;
+  http.setConnectTimeout(3000);
+  http.setTimeout(5000);
+  if (!http.begin(url)) {
+    Serial.println("Ring: bad doorbell URL");
+    return;
+  }
+  Serial.printf("Ring sent, answer %d\n", http.POST(""));  // never logs the URL: it holds a secret
+  http.end();
+}
+
+#if defined(AUDIO_STREAM) || defined(CHIME_DETECT)
 static i2s_chan_handle_t micChannel = nullptr;
 
 static bool startMic() {
@@ -346,6 +413,23 @@ static bool startMic() {
          i2s_channel_enable(micChannel) == ESP_OK;
 }
 
+#endif
+
+#ifdef CHIME_DETECT
+static void chimeTask(void *) {
+  static int16_t samples[512];
+  for (;;) {
+    size_t bytes = 0;
+    if (i2s_channel_read(micChannel, samples, sizeof(samples), &bytes, 1000) != ESP_OK) continue;
+    if (detector.feed(samples, bytes / sizeof(int16_t))) {
+      Serial.println("Doorbell!");
+      ringPending = true;
+    }
+  }
+}
+#endif
+
+#ifdef AUDIO_STREAM
 static esp_err_t audioHandler(httpd_req_t *req) {
   static int16_t samples[1024];
   httpd_resp_set_type(req, "audio/L16;rate=16000;channels=1");
@@ -383,6 +467,16 @@ static bool startServers() {
   addRoute(web, "/capture", captureHandler);
   addRoute(web, "/status", statusHandler);
   addRoute(web, "/control", controlHandler);
+  httpd_uri_t ring = {};
+  ring.uri = "/ring";
+  ring.method = HTTP_POST;
+  ring.handler = ringHandler;
+  httpd_register_uri_handler(web, &ring);
+  httpd_uri_t doorbellUrl = {};
+  doorbellUrl.uri = "/doorbell-url";
+  doorbellUrl.method = HTTP_POST;
+  doorbellUrl.handler = doorbellUrlHandler;
+  httpd_register_uri_handler(web, &doorbellUrl);
 
   config.server_port = 81;
   config.ctrl_port = 32769;
@@ -419,9 +513,10 @@ void setup() {
   // The OV3660 is mirrored natively.
   esp_camera_sensor_get()->set_hmirror(esp_camera_sensor_get(), 1);
 #endif
-#ifdef AUDIO_STREAM
+#if defined(AUDIO_STREAM) || defined(CHIME_DETECT)
   if (!startMic()) Serial.println("Warning: mic failed to start");
 #endif
+  prefs.begin("doorcam");
 
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
@@ -440,11 +535,18 @@ void setup() {
     Serial.println("Could not start web servers. Restarting.");
     ESP.restart();
   }
+#ifdef CHIME_DETECT
+  if (micChannel) xTaskCreatePinnedToCore(chimeTask, "chime", 6144, nullptr, 3, nullptr, 0);
+#endif
   Serial.printf("Ready: http://%s/ or http://%s.local/\n",
                 WiFi.localIP().toString().c_str(), HOSTNAME);
 }
 
 void loop() {
+  if (ringPending) {
+    ringPending = false;
+    if (WiFi.status() == WL_CONNECTED) sendRing();
+  }
   static uint32_t lostSince = 0;
   if (WiFi.status() == WL_CONNECTED) {
     lostSince = 0;
@@ -454,5 +556,5 @@ void loop() {
     Serial.println("WiFi lost for 60s. Restarting.");
     ESP.restart();
   }
-  delay(1000);
+  delay(100);
 }
