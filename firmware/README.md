@@ -103,6 +103,42 @@ On a board with no mic, leave out `--source` to use your computer's mic.
 was held out of training. Recordings and the model stay in `tools/chime_data/`,
 which git ignores.
 
+### Can't ring the bell repeatedly?
+One clean recording is enough to start. Convert it, then train on simulated
+versions of it in different rooms, at different volumes, through different mics
+and over background noise:
+
+```bash
+mkdir -p tools/chime_data/source
+```
+
+```bash
+ffmpeg -i my_doorbell.m4a -ac 1 -ar 16000 -c:a pcm_s16le tools/chime_data/source/doorbell.wav
+```
+
+```bash
+uv run tools/chime_sim.py tools/chime_data/source/doorbell.wav
+```
+
+WAV files of ordinary room noise in `tools/chime_data/room/` make it more
+realistic: `room_train*` files for training, any others for testing.
+
+Single-note bells are matched on pitch, sudden strike, steady fade and lack of
+overtones.
+
+**Status: unproven on a real mic.** In simulation it does well, but it detected
+none of 28 speaker and earbud playbacks through the XIAO's mic (some possibly
+silent or masked by a TV), and the cause isn't known yet. Check the mic responds
+to speech up close, then test with a real ring, before relying on it.
+
+Limits to expect:
+- The scores only cover simulated conditions.
+- Simulated bell levels may be too loud. The XIAO's mic reads low, so a real bell
+  may land below the range it does well in.
+- A neighbor's identical bell, heard loudly enough, will also trigger it.
+- A loud TV can hide the bell: detection falls off sharply when the noise is as
+  loud as the bell.
+
 ## Troubleshooting
 | Symptom | Likely cause |
 |---|---|

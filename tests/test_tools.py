@@ -198,3 +198,62 @@ def test_board_mic_reassembles_pcm_across_chunks():
     mic.chunks = iter(pcm[i : i + 37] for i in range(0, len(pcm), 37))
     audio = np.concatenate([mic.read(300), mic.read(700)])
     assert np.allclose(audio * 32768, np.arange(-500, 500) * 20)
+
+
+# --- Training a single-note bell from one recording ---
+
+import chime_sim  # noqa: E402
+
+BELL_HZ = 766.0
+
+
+def struck_bell(seconds=2.4, fade_db_s=19.0):
+    t = np.arange(int(seconds * RATE)) / RATE
+    env = 10 ** (-fade_db_s * t / 20)
+    return 0.13 * env * (np.sin(2 * np.pi * BELL_HZ * t) + 0.02 * np.sin(2 * np.pi * 4078 * t) * np.exp(-30 * t))
+
+
+@pytest.fixture(scope="module")
+def sim_model():
+    source = chime_sim.trim_to_strike(struck_bell())
+    tone = chime.find_tones([source], max_tones=1)[0]
+    return chime_sim.train(source, tone, [], chimes=60, backgrounds=8), source, tone
+
+
+def test_sim_learns_the_bell_note_and_its_fade(sim_model):
+    model, _, tone = sim_model
+    assert abs(tone - BELL_HZ) < 16
+    low, high = model["strike"]["fade_db_s"]
+    assert low < -19 < high < 0
+
+
+def test_sim_detects_new_simulated_bells(sim_model):
+    model, source, tone = sim_model
+    rng = np.random.default_rng(1234)
+    clips = [chime_sim.chime_clip(source, rng, [], tone) for _ in range(30)]
+    assert chime_sim.caught(model, clips) >= 0.8
+
+
+@pytest.mark.parametrize("kind", ["beep at same pitch", "other doorbell", "speech", "knocking"])
+def test_sim_rejects_other_sounds(sim_model, kind):
+    model, source, tone = sim_model
+    rng = np.random.default_rng(4321)
+    clips = [chime_sim.background_clip(kind, source, rng, [], tone) for _ in range(20)]
+    assert chime_sim.caught(model, clips) <= 0.1
+
+
+def test_steady_tone_at_the_bell_pitch_has_no_strike(sim_model):
+    model, _, _ = sim_model
+    t = np.arange(4 * RATE) / RATE
+    steady = 0.2 * np.sin(2 * np.pi * BELL_HZ * t)
+    steady[: RATE] = 0
+    assert chime.detect(steady, model) == []
+
+
+def test_musical_note_at_the_bell_pitch_is_rejected_by_its_overtones(sim_model):
+    model, _, _ = sim_model
+    t = np.arange(3 * RATE) / RATE
+    env = 10 ** (-23 * t / 20)
+    note_ = sum(np.sin(2 * np.pi * BELL_HZ * k * t) / k for k in range(1, 6)) * env
+    audio = np.concatenate([np.zeros(RATE), 0.2 * note_, np.zeros(RATE)]) + rng.normal(0, 0.001, 5 * RATE)
+    assert chime.detect(audio, model) == []

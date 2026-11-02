@@ -22,6 +22,7 @@ on a home server.
 | `firmware/` | Firmware for the XIAO and ESP32-CAM, and the [bench test guide](firmware/README.md) |
 | `tools/recorder.py` | Records motion clips from the stream |
 | `tools/chime.py` | Trains and tests a detector on your own doorbell |
+| `tools/chime_sim.py` | Trains that detector from a single recording, using simulation |
 
 Models are parametric OpenSCAD. Change values in the Customizer and re-export.
 
@@ -31,9 +32,9 @@ Models are parametric OpenSCAD. Change values in the Customizer and re-export.
 - [ ] Check camera module and XIAO dimensions against the models
 - [x] XIAO firmware: 640x480 live stream, up to 4 viewers, mic audio for training (tested on a board)
 - [x] Motion recorder (tested on a live stream)
-- [x] Chime trainer (tested on simulated chimes only)
+- [x] Chime trainer, including training from one recording (tested in simulation only)
 - [ ] ESP32-CAM build tested on a real board (compiles only)
-- [ ] Train on a real doorbell with the XIAO's mic
+- [ ] Get the trained detector working through the XIAO's mic (no detections in playback tests so far)
 - [ ] Chime detection running on the board itself
 - [ ] Home Assistant: TV popup + notifications
 - [ ] Frigate: recording + package detection

@@ -17,6 +17,8 @@ computer's.
 
 A chime is mostly a few steady tones, so the model is just those frequencies
 and a threshold. That's small enough to run on an ESP32 with Goertzel filters.
+A bell with a single note also has to match the shape of a strike: a sudden
+start and a steady fade. See tools/chime_sim.py to train from one recording.
 Train with the microphone that will do the listening: a laptop's model tells
 you if the approach works, but the door unit needs samples from its own mic.
 """
@@ -133,6 +135,61 @@ def scores_over_time(audio: np.ndarray, tones: list[float], min_level: float) ->
     return scores
 
 
+STRIKE_WINDOW_S = 1.0   # how much of the fade to look at
+STRIKE_PRE = 6          # frames before the strike used as the "before" level
+STRIKE_RISE = 3         # frames the strike may take to reach its peak
+MIN_FADE_FRAMES = 8     # fewer frames above the noise can't show a fade
+FADE_MARGIN_DB = 6.0
+MAX_OVERTONE_DB = -12.0 # bells are nearly pure; musical notes have strong overtones
+
+
+def strike_candidates(audio: np.ndarray, tone_hz: float, min_level: float = 0.0):
+    """Yields possible strikes: (end_frame, purity, attack_db, fade_db_s, wobble_db, overtone_db)."""
+    power = power_frames(audio)
+    tone = power[:, np.abs(FREQS - tone_hz) <= TONE_WIDTH].sum(axis=1)
+    # The bands scale with k so they also catch overtones of notes near the bell's pitch.
+    overtones = sum(power[:, np.abs(FREQS - tone_hz * k) <= TONE_WIDTH * k].sum(axis=1) for k in (2, 3))
+    purity = tone / np.maximum(frame_levels(power), 1e-12)
+    db = 10 * np.log10(tone + 1e-12)
+    window = int(STRIKE_WINDOW_S * SAMPLE_RATE / HOP)
+    half = window // 2
+    seconds = np.arange(window) * HOP / SAMPLE_RATE
+    for s in range(STRIKE_PRE, len(db) - window + 1):
+        if tone[s : s + STRIKE_RISE].max() < min_level:
+            continue
+        before = float(np.median(db[s - STRIKE_PRE : s]))
+        attack = float(db[s : s + STRIKE_RISE].max() - before)
+        if attack <= 0 or int(np.argmax(db[s : s + window])) >= STRIKE_RISE:
+            continue
+        # Only fit the part of the fade that's still above the noise.
+        keep = np.arange(STRIKE_RISE - 1, window)
+        keep = keep[db[s + keep] > before + FADE_MARGIN_DB]
+        if len(keep) < MIN_FADE_FRAMES:
+            continue
+        slope, intercept = np.polyfit(seconds[keep], db[s + keep], 1)
+        wobble = float(np.std(db[s + keep] - (slope * seconds[keep] + intercept)))
+        overtone = 10 * np.log10((overtones[s : s + half].sum() + 1e-12) / (tone[s : s + half].sum() + 1e-12))
+        yield s + window - 1, float(purity[s : s + half].mean()), attack, float(slope), wobble, float(overtone)
+
+
+def strike_scores(audio: np.ndarray, model: dict) -> np.ndarray:
+    """Score per frame: the tone's purity, if a strike that fits the model ended there."""
+    scores = np.zeros(max(len(power_frames(audio)), 1))
+    strike = model["strike"]
+    low, high = strike["fade_db_s"]
+    for end, purity, attack, fade, wobble, overtone in strike_candidates(audio, model["tones_hz"][0], model["min_level"]):
+        if (attack >= strike["min_attack_db"] and low <= fade <= high and wobble <= strike["max_wobble_db"]
+                and overtone <= strike["max_overtone_db"]):
+            scores[end] = purity
+    return scores
+
+
+def model_scores(audio: np.ndarray, model: dict) -> np.ndarray:
+    if "strike" in model:
+        return strike_scores(audio, model)
+    return scores_over_time(audio, model["tones_hz"], model["min_level"])
+
+
 def score_clip(audio: np.ndarray, tones: list[float], min_level: float) -> float:
     return float(scores_over_time(audio, tones, min_level).max())
 
@@ -142,10 +199,52 @@ def min_level_for(clips: list[np.ndarray]) -> float:
     return float(min(frame_levels(power_frames(c)).max() for c in clips) * 0.02)
 
 
+def fit_strike(positives: list[np.ndarray], negatives: list[np.ndarray], tone_hz: float) -> dict:
+    """A single-note bell: learn the strike's shape from the chime clips."""
+    min_level = min_level_for(positives)
+    best = []
+    for clip in positives:
+        found = list(strike_candidates(clip, tone_hz, min_level))
+        if found:
+            best.append(max(found, key=lambda c: c[1] * c[2]))
+    if len(best) < len(positives) * 0.5:
+        raise ValueError("Most chime clips don't look like a single struck note")
+    _, _, attacks, fades, wobbles, overtones = np.array(best).T
+    low, high = np.percentile(fades, [1, 99])
+    model = {
+        "tones_hz": [round(tone_hz, 1)],
+        "min_level": min_level,
+        "sample_rate": SAMPLE_RATE,
+        "frame": FRAME,
+        "hop": HOP,
+        "tone_width_hz": TONE_WIDTH,
+        "strike": {
+            "min_attack_db": round(float(np.percentile(attacks, 1)) * 0.8, 2),
+            "fade_db_s": [round(float(low) * 1.2, 2), round(float(high) * 0.8, 2)],
+            "max_wobble_db": round(float(np.percentile(wobbles, 99)) * 1.2, 2),
+            "max_overtone_db": round(min(float(np.percentile(overtones, 90)) + 3, MAX_OVERTONE_DB), 2),
+        },
+    }
+    pos = np.array([strike_scores(c, model).max() for c in positives])
+    neg = np.array([strike_scores(c, model).max() for c in negatives]) if negatives else np.zeros(1)
+    # Most chimes must pass, even in noise, so a stray clip can't set the threshold.
+    low_pos, high_neg = float(np.percentile(pos, 5)), float(neg.max())
+    threshold = (low_pos + high_neg) / 2 if low_pos > high_neg else high_neg * 1.05
+    model.update(
+        threshold=round(threshold, 4),
+        lowest_chime_score=round(low_pos, 4),
+        highest_background_score=round(high_neg, 4),
+        separable=low_pos > high_neg,
+    )
+    return model
+
+
 def fit(positives: list[np.ndarray], negatives: list[np.ndarray]) -> dict:
     tones = find_tones(positives)
     if not tones:
         raise ValueError("No clear tones found in the chime recordings")
+    if len(tones) == 1:
+        return fit_strike(positives, negatives, tones[0])
     min_level = min_level_for(positives)
     pos = [score_clip(c, tones, min_level) for c in positives]
     neg = [score_clip(c, tones, min_level) for c in negatives]
@@ -173,13 +272,13 @@ def leave_one_out(positives: list[np.ndarray], negatives: list[np.ndarray]) -> t
     detected = 0
     for i, clip in enumerate(positives):
         model = fit(positives[:i] + positives[i + 1 :], negatives)
-        detected += score_clip(clip, model["tones_hz"], model["min_level"]) > model["threshold"]
+        detected += model_scores(clip, model).max() > model["threshold"]
     return detected, len(positives)
 
 
 def detect(audio: np.ndarray, model: dict, cooldown_s: float = 5.0) -> list[float]:
     """Times in seconds when the chime was detected."""
-    scores = scores_over_time(audio, model["tones_hz"], model["min_level"])
+    scores = model_scores(audio, model)
     hits, last = [], -cooldown_s
     for i, score in enumerate(scores):
         t = (i * HOP + FRAME) / SAMPLE_RATE
@@ -268,6 +367,8 @@ def cmd_train(args) -> None:
     detected, total = leave_one_out(positives, negatives)
 
     print(f"Tones: {model['tones_hz']} Hz")
+    if "strike" in model:
+        print(f"Single struck note: {model['strike']}")
     print(f"Threshold: {model['threshold']} (lowest chime {model['lowest_chime_score']}, "
           f"highest background {model['highest_background_score']})")
     print(f"Chimes detected when held out of training: {detected}/{total}")
@@ -298,7 +399,7 @@ def cmd_listen(args) -> None:
         while True:
             block = mic.read(HOP * 4)
             buffer = np.concatenate((buffer[len(block):], block))
-            score = score_clip(buffer, model["tones_hz"], model["min_level"])
+            score = float(model_scores(buffer, model).max())
             if args.verbose:
                 print(f"score {score:.3f}", end="\r", flush=True)
             if score > model["threshold"] and time.time() - last > args.cooldown:
