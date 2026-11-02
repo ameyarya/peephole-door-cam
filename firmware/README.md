@@ -1,18 +1,31 @@
 # Testing the software on a bench
 
-You can test everything before building the hardware. Three firmware builds:
+You can test everything before building the hardware. Two firmware builds:
 
 | Build | Board | Use |
 |---|---|---|
-| `xiao_sense_training` | XIAO ESP32S3 Sense | Video plus a mic audio stream, for doorbell training. **Don't leave this running at the door**: anyone on your network could listen to the room |
-| `xiao_sense` | XIAO ESP32S3 Sense | Video, plus doorbell detection on the board. No audio leaves it |
+| `xiao_sense` | XIAO ESP32S3 Sense | The door unit: camera and mic always live, doorbell detection on the board, updates over WiFi |
 | `esp32cam` | AI-Thinker ESP32-CAM | Video only, it has no mic. Train on your computer's mic instead |
+
+Before the first XIAO flash, create the token that protects the mic and updates:
+
+```bash
+cp src/secrets.h.example src/secrets.h
+```
+
+Then put a long random string in it. `secrets.h` is git-ignored. Without a token the
+board still works, but refuses mic listeners and updates.
+
+**The mic is always on.** Recording conversations without consent is illegal in many
+places, including hallways and shared spaces. Check your local rules, and tell the
+people you live with. Nothing is saved on the board: audio only leaves it when someone
+with the token listens.
 
 ## 1. Flash the board
 **XIAO:** plug it in over USB-C. From this folder:
 
 ```bash
-pio run -e xiao_sense_training -t upload
+pio run -e xiao_sense -t upload
 ```
 
 If it can't connect, hold BOOT while plugging it in.
@@ -58,7 +71,8 @@ Open `http://door-cam.local/`, or the IP address from the boot log.
 | `/status` | Signal strength, memory, uptime as JSON |
 | `/control?framesize=vga&quality=12&vflip=1&hmirror=0` | Change settings until the next reboot (`qvga`, `vga`, `svga`, `xga`, `hd`) |
 | `:81/stream` | MJPEG stream, up to 4 viewers at once |
-| `:82/audio` | 16 kHz mono PCM from the mic, `xiao_sense_training` only |
+| `:82/audio?token=…` | Live 16 kHz mono PCM from the mic, up to 2 listeners. Needs the token |
+| `POST /ota` | Firmware update, needs the token. Use `./ota.sh` |
 
 The stream has no password, so keep it on your home network and never
 port-forward it.
@@ -74,16 +88,15 @@ Clips go to `recordings/YYYY-MM-DD/`, which git ignores. Walk past the camera to
 test it. If it triggers too easily, raise `--sensitivity`, for example to `0.03`.
 
 ## 5. Train on your doorbell
-Train with the mic that will do the listening. With the XIAO on the training
-build, put it where it will live (a USB power bank works), then from the repo
+Train with the mic that will do the listening. Put the XIAO where it will live (a USB power bank works), then from the repo
 root:
 
 ```bash
-uv run tools/chime.py record chime --count 10 --source http://door-cam.local:82/audio
+uv run tools/chime.py record chime --count 10 --source 'http://door-cam.local:82/audio?token=YOUR_TOKEN'
 ```
 
 ```bash
-uv run tools/chime.py record background --seconds 30 --count 5 --source http://door-cam.local:82/audio
+uv run tools/chime.py record background --seconds 30 --count 5 --source 'http://door-cam.local:82/audio?token=YOUR_TOKEN'
 ```
 
 For the background clips, include everyday noise: TV, talking, music, a knock.
@@ -94,7 +107,7 @@ uv run tools/chime.py train
 ```
 
 ```bash
-uv run tools/chime.py listen --verbose --source http://door-cam.local:82/audio
+uv run tools/chime.py listen --verbose --source 'http://door-cam.local:82/audio?token=YOUR_TOKEN'
 ```
 
 On a board with no mic, leave out `--source` to use your computer's mic.
@@ -168,6 +181,18 @@ curl -X POST http://door-cam.local/ring
 If a ring doesn't trigger it, `/status` shows the numbers for the last bell-like
 sound under `last_strike` (numbers only, no audio). Compare them with the limits in
 `firmware/src/chime_model.h`. After an alert, the board ignores the bell for 5 seconds.
+
+## 7. Update over WiFi
+After the first USB flash, the Mac only needs to be on the same network:
+
+```bash
+./ota.sh
+```
+
+A new firmware is on trial until the camera and WiFi come up. If it restarts or crashes
+first, the board goes back to the previous firmware by itself. If a new firmware hangs
+without restarting, or the board can't reach WiFi at all, you'll need USB. `running` in
+`/status` shows which of the two firmware slots is active.
 
 ## Troubleshooting
 | Symptom | Likely cause |

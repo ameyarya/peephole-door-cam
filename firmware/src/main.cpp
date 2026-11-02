@@ -5,14 +5,16 @@
 //   http://door-cam.local/status   JSON health info
 //   http://door-cam.local/control?framesize=vga&quality=12&vflip=1&hmirror=0
 //   http://door-cam.local:81/stream  MJPEG, up to 4 viewers at once
-//   http://door-cam.local:82/audio   16 kHz mono PCM, training builds only
+//   http://door-cam.local:82/audio?token=...  live 16 kHz mono PCM, up to 2 listeners
+//   POST http://door-cam.local/ota  firmware image, with an X-Token header (see ota.sh)
 //   POST http://door-cam.local/doorbell-url  body: the URL to POST to on a ring
 //   POST http://door-cam.local/ring          acts as if the bell rang
 //
-// With CHIME_DETECT the board listens for the doorbell itself. No audio leaves it.
+// The camera and mic run all the time. With CHIME_DETECT the board listens for the
+// doorbell itself, and only streams audio to someone holding the token.
 //
-// There is no authentication, so keep this on a trusted network and never
-// port-forward it.
+// Only updates and the mic need the token in secrets.h. Everything else has no
+// authentication, so keep this on a trusted network and never port-forward it.
 
 #include <Arduino.h>
 #include <ESPmDNS.h>
@@ -29,6 +31,21 @@
 #if defined(AUDIO_STREAM) || defined(CHIME_DETECT)
 #include "driver/i2s_pdm.h"
 #endif
+
+#ifdef BOARD_XIAO_S3_SENSE
+#include <Update.h>
+#include "esp_ota_ops.h"
+#endif
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#define DOORCAM_TOKEN ""
+#endif
+
+static bool tokenMatches(const char *given) {
+  return DOORCAM_TOKEN[0] != 0 && strcmp(given, DOORCAM_TOKEN) == 0;
+}
 
 static const char *HOSTNAME = "door-cam";
 static const char *SETUP_AP = "door-cam-setup";
@@ -88,6 +105,7 @@ static const int MAX_CAPTURE_FAILURES = 5;
 static volatile uint32_t framesSent = 0;
 static volatile int streamClients = 0;
 static volatile uint32_t rings = 0;
+static volatile bool updating = false;  // flash writes and camera DMA don't mix
 
 #ifdef CHIME_DETECT
 #include "chime_detector.h"
@@ -172,12 +190,13 @@ static void viewerRemove() {
   xSemaphoreGive(frameLock);
 }
 
-// Only captures while someone is watching.
+// Stops only while no one is registered as a viewer. setup() registers one for good
+// on the XIAO, so the camera stays live.
 static void captureTask(void *) {
   uint32_t seq = 0;
   int failures = 0;
   for (;;) {
-    if (viewers <= 0) {
+    if (viewers <= 0 || updating) {
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
@@ -243,18 +262,26 @@ static esp_err_t captureHandler(httpd_req_t *req) {
   return res;
 }
 
+static const char *runningPartition() {
+#ifdef BOARD_XIAO_S3_SENSE
+  return esp_ota_get_running_partition()->label;
+#else
+  return "";
+#endif
+}
+
 static esp_err_t statusHandler(httpd_req_t *req) {
   sensor_t *s = esp_camera_sensor_get();
-  char json[512];
+  char json[640];
   snprintf(json, sizeof(json),
            "{\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"free_heap\":%u,"
            "\"free_psram\":%u,\"frames_sent\":%lu,\"stream_clients\":%d,\"rings\":%lu,"
-           "\"framesize\":%d,\"quality\":%d}",
+           "\"framesize\":%d,\"quality\":%d,\"running\":\"%s\",\"built\":\"%s\"}",
            WiFi.localIP().toString().c_str(), WiFi.RSSI(),
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (unsigned)ESP.getFreePsram(), (unsigned long)framesSent,
            streamClients, (unsigned long)rings, s ? s->status.framesize : -1,
-           s ? s->status.quality : -1);
+           s ? s->status.quality : -1, runningPartition(), __DATE__ " " __TIME__);
 #ifdef CHIME_DETECT
   // Numbers about the last bell-like sound. No audio.
   ChimeDetector::Strike st;
@@ -415,34 +442,127 @@ static bool startMic() {
 
 #endif
 
-#ifdef CHIME_DETECT
-static void chimeTask(void *) {
+#ifdef AUDIO_STREAM
+// The last second of audio, for listeners. One writer: micTask.
+static const uint32_t AUDIO_RING = 16000;
+static const int MAX_AUDIO_CLIENTS = 2;
+static int16_t *audioRing = nullptr;
+static volatile uint32_t audioWritten = 0;
+static volatile int audioClients = 0;
+
+static void audioClientTask(void *arg) {
+  httpd_req_t *req = (httpd_req_t *)arg;
+  httpd_resp_set_type(req, "audio/L16;rate=16000;channels=1");
+  uint32_t at = audioWritten;
+  esp_err_t res = ESP_OK;
+  while (res == ESP_OK) {
+    uint32_t written = audioWritten;
+    if (written == at) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+    if (written - at > AUDIO_RING) at = written - AUDIO_RING / 2;  // too slow: skip ahead
+    uint32_t offset = at % AUDIO_RING;
+    uint32_t count = min(written - at, AUDIO_RING - offset);
+    res = httpd_resp_send_chunk(req, (const char *)(audioRing + offset), count * sizeof(int16_t));
+    at += count;
+  }
+  xSemaphoreTake(frameLock, portMAX_DELAY);
+  audioClients = audioClients - 1;
+  xSemaphoreGive(frameLock);
+  httpd_req_async_handler_complete(req);
+  vTaskDelete(nullptr);
+}
+
+static esp_err_t audioHandler(httpd_req_t *req) {
+  char query[96], token[64] = "";
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+    httpd_query_key_value(query, "token", token, sizeof(token));
+  if (!tokenMatches(token) || !audioRing) {
+    httpd_resp_set_status(req, "401 Unauthorized");
+    return httpd_resp_sendstr(req, "token required\n");
+  }
+  xSemaphoreTake(frameLock, portMAX_DELAY);
+  bool ok = audioClients < MAX_AUDIO_CLIENTS;
+  if (ok) audioClients = audioClients + 1;
+  xSemaphoreGive(frameLock);
+  if (!ok) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    return httpd_resp_sendstr(req, "too many listeners\n");
+  }
+  httpd_req_t *asyncReq = nullptr;
+  esp_err_t err = httpd_req_async_handler_begin(req, &asyncReq);
+  if (err == ESP_OK && xTaskCreate(audioClientTask, "audio_client", 4096, asyncReq, 4, nullptr) != pdPASS) {
+    httpd_req_async_handler_complete(asyncReq);
+    err = ESP_ERR_NO_MEM;
+  }
+  if (err != ESP_OK) {
+    xSemaphoreTake(frameLock, portMAX_DELAY);
+    audioClients = audioClients - 1;
+    xSemaphoreGive(frameLock);
+  }
+  return err;
+}
+#endif
+
+#if defined(AUDIO_STREAM) || defined(CHIME_DETECT)
+// The one reader of the mic: hands samples to the doorbell detector and to listeners.
+static void micTask(void *) {
   static int16_t samples[512];
   for (;;) {
     size_t bytes = 0;
     if (i2s_channel_read(micChannel, samples, sizeof(samples), &bytes, 1000) != ESP_OK) continue;
-    if (detector.feed(samples, bytes / sizeof(int16_t))) {
+    size_t count = bytes / sizeof(int16_t);
+#ifdef AUDIO_STREAM
+    if (audioRing) {
+      uint32_t written = audioWritten;
+      for (size_t i = 0; i < count; i++) audioRing[(written + i) % AUDIO_RING] = samples[i];
+      audioWritten = written + count;
+    }
+#endif
+#ifdef CHIME_DETECT
+    if (detector.feed(samples, count)) {
       Serial.println("Doorbell!");
       ringPending = true;
     }
+#endif
   }
 }
 #endif
 
-#ifdef AUDIO_STREAM
-static esp_err_t audioHandler(httpd_req_t *req) {
-  static int16_t samples[1024];
-  httpd_resp_set_type(req, "audio/L16;rate=16000;channels=1");
-  esp_err_t res = ESP_OK;
-  while (res == ESP_OK) {
-    size_t bytes = 0;
-    if (i2s_channel_read(micChannel, samples, sizeof(samples), &bytes, 1000) != ESP_OK) {
-      Serial.println("Mic read failed");
-      return ESP_FAIL;
-    }
-    res = httpd_resp_send_chunk(req, (const char *)samples, bytes);
+#ifdef BOARD_XIAO_S3_SENSE
+// A new firmware stays on trial until setup() confirms the camera and WiFi work. If
+// it restarts or crashes first, the bootloader goes back to the previous one.
+extern "C" bool verifyRollbackLater() { return true; }
+
+static esp_err_t otaHandler(httpd_req_t *req) {
+  char token[64] = "";
+  httpd_req_get_hdr_value_str(req, "X-Token", token, sizeof(token));
+  if (!tokenMatches(token)) {
+    httpd_resp_set_status(req, "401 Unauthorized");
+    return httpd_resp_sendstr(req, "token required\n");
   }
-  return res;
+  updating = true;
+  bool ok = Update.begin(req->content_len, U_FLASH);
+  static char chunk[2048];
+  size_t left = req->content_len;
+  while (ok && left > 0) {
+    int got = httpd_req_recv(req, chunk, min(left, sizeof(chunk)));
+    if (got == HTTPD_SOCK_ERR_TIMEOUT) continue;
+    ok = got > 0 && Update.write((uint8_t *)chunk, got) == (size_t)got;
+    if (ok) left -= got;
+  }
+  ok = ok && Update.end(true);
+  if (!ok) {
+    Update.abort();
+    updating = false;
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    return httpd_resp_sendstr(req, "update failed\n");
+  }
+  httpd_resp_sendstr(req, "ok, restarting\n");
+  delay(500);
+  ESP.restart();
+  return ESP_OK;
 }
 #endif
 
@@ -477,6 +597,13 @@ static bool startServers() {
   doorbellUrl.method = HTTP_POST;
   doorbellUrl.handler = doorbellUrlHandler;
   httpd_register_uri_handler(web, &doorbellUrl);
+#ifdef BOARD_XIAO_S3_SENSE
+  httpd_uri_t ota = {};
+  ota.uri = "/ota";
+  ota.method = HTTP_POST;
+  ota.handler = otaHandler;
+  httpd_register_uri_handler(web, &ota);
+#endif
 
   config.server_port = 81;
   config.ctrl_port = 32769;
@@ -489,6 +616,7 @@ static bool startServers() {
   httpd_handle_t audio = nullptr;
   config.server_port = 82;
   config.ctrl_port = 32770;
+  config.max_open_sockets = MAX_AUDIO_CLIENTS + 1;
   if (httpd_start(&audio, &config) != ESP_OK) return false;
   addRoute(audio, "/audio", audioHandler);
 #endif
@@ -498,6 +626,10 @@ static bool startServers() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\nDoor cam starting");
+#ifdef ROLLBACK_TEST  // a deliberately bad firmware, for testing that rollback works
+  delay(3000);
+  ESP.restart();
+#endif
 
   if (!psramFound()) Serial.println("Warning: no PSRAM found");
   camera_config_t config = cameraConfig();
@@ -510,11 +642,15 @@ void setup() {
   frameLock = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(captureTask, "capture", 4096, nullptr, 6, nullptr, 1);
 #ifdef BOARD_XIAO_S3_SENSE
+  viewerAdd();  // keeps the camera live with nobody watching
   // The OV3660 is mirrored natively.
   esp_camera_sensor_get()->set_hmirror(esp_camera_sensor_get(), 1);
 #endif
 #if defined(AUDIO_STREAM) || defined(CHIME_DETECT)
   if (!startMic()) Serial.println("Warning: mic failed to start");
+#ifdef AUDIO_STREAM
+  audioRing = (int16_t *)heap_caps_malloc(AUDIO_RING * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+#endif
 #endif
   prefs.begin("doorcam");
 
@@ -535,8 +671,11 @@ void setup() {
     Serial.println("Could not start web servers. Restarting.");
     ESP.restart();
   }
-#ifdef CHIME_DETECT
-  if (micChannel) xTaskCreatePinnedToCore(chimeTask, "chime", 6144, nullptr, 3, nullptr, 0);
+#if defined(AUDIO_STREAM) || defined(CHIME_DETECT)
+  if (micChannel) xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 3, nullptr, 0);
+#endif
+#ifdef BOARD_XIAO_S3_SENSE
+  esp_ota_mark_app_valid_cancel_rollback();  // camera and WiFi came up: keep this firmware
 #endif
   Serial.printf("Ready: http://%s/ or http://%s.local/\n",
                 WiFi.localIP().toString().c_str(), HOSTNAME);

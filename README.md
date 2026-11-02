@@ -30,7 +30,8 @@ Models are parametric OpenSCAD. Change values in the Customizer and re-export.
 - [x] Sleeve and enclosure designed (door: 34mm thick, ~13mm hole)
 - [ ] Test print and fit
 - [ ] Check camera module and XIAO dimensions against the models
-- [x] XIAO firmware: 640x480 live stream, up to 4 viewers, mic audio for training (tested on a board)
+- [x] XIAO firmware: camera and mic always live, up to 4 viewers and 2 token-protected listeners (tested on a board)
+- [x] Updates over WiFi, with automatic rollback (both tested on a board)
 - [x] Motion recorder (tested on a live stream)
 - [x] Chime trainer, including training from one recording (tested in simulation only)
 - [ ] ESP32-CAM build tested on a real board (compiles only)
