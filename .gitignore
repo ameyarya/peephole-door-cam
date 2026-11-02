@@ -16,3 +16,8 @@ media/
 # Build output
 .pio/
 build/
+
+# Footage and audio from a real door stay local
+recordings/
+tools/chime_data/
+*.wav
