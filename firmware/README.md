@@ -84,7 +84,7 @@ and the stream is capped at 10 frames a second. The radio saves power while nobo
 watches or listens, transmits at a quarter of full power, and the processor runs at
 160 MHz instead of 240.
 
-Measured on the chip (`chip_c`), with the board in the housing: about 42 °C and falling
+Measured on the chip (`chip_c`): about 42 °C and falling
 with the camera asleep, and about 64 °C streaming without a break. While motion recording
 is on, the recorder counts as a viewer, so the camera never sleeps. Turn recording off
 when you don't need it.
