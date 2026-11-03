@@ -91,8 +91,8 @@ the camera to test it.
 
 It also serves the clips to your network for the Smart Home page, through a private
 link it prints when it starts (`--serve-port 0` turns that off). Paste the link into
-the page's Settings with the Mac's real address. Clips appear under the live view when
-you open the door camera, where you can play or delete them. Deleting is permanent. If it triggers too easily, raise `--sensitivity`, for example to `0.03`.
+the page's Settings with the Mac's real address. The camera button at the top right of
+the page opens the recordings, where you can play or delete them. Deleting is permanent. If it triggers too easily, raise `--sensitivity`, for example to `0.03`.
 
 **Motion recording** in the page's Settings turns recording off and on. While it's off, the
 recorder lets go of the camera and saves nothing, and it stays off after a restart. When you
