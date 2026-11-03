@@ -12,19 +12,21 @@ nothing stuck to the door.
 - **Top:** a slot for the WiFi antenna's cable.
 - **Front:** the camera's lens barrel sits in the tube's opening, which centres it.
 
-Housing 25.4 × 21.5 × 12.8 mm. The tube is 10.3 mm across and reaches 16 mm into the
-viewer, stopping 2 mm short of the glass.
+Housing 24.8 × 20.9 × 13 mm, about 3 g of plastic. The tube is 10.1 mm across, with four
+thin ribs that reach 10.6 mm. They crush slightly as it goes into the 10.5 mm bore, so it
+grips without a fit test. It reaches 16 mm into the viewer, stopping 2 mm short of the glass.
 
 The board's dimensions come from Seeed's 3D model of the XIAO ESP32S3 Sense. The model
 was checked against it: no part of the board touches the plastic, with at least
-0.2 mm to spare. Not printed or fit-tested yet.
+0.2 mm to spare. The tightest spot is the lens barrel in the tube. Not printed or fit-tested yet.
 
 ## Print
-1. Print `stl/fit_test.stl`. The three rings are 10.2, 10.3 and 10.4 mm: the thinnest
-   collar is 10.2 and the thickest is 10.4. Find the tightest one that still slides.
-2. If it isn't 10.3, change `tube_od` in `peephole_mount.scad` and re-export.
-3. Print `stl/housing.stl` with the open back on the bed. No supports: the front
-   bridges across. PETG, 0.12 mm layers, 3+ walls.
+Print `stl/housing.stl` with the open back on the bed. No supports: the front bridges
+across. PETG or PLA, 0.12 mm layers, 0.4 mm nozzle, 100% infill (the walls are only
+three lines thick anyway).
+
+If the tube is too loose in the viewer, raise `rib_d` by 0.1 and print again. If it's
+too tight, lower it.
 
 The camera may differ slightly from Seeed's model, which shows the older OV2640. If
 the board is tight, raise `gap`.

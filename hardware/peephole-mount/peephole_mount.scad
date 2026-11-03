@@ -18,20 +18,23 @@ bore_depth  = 18.0;   // from the viewer's inner face to the eyepiece glass
 tip_gap     = 2.0;    // tube stops this far short of the glass
 
 /* [Tube] */
-tube_od     = 10.3;   // use the size that worked from the fit test
+tube_od     = 10.1;   // slides freely in the bore
+rib_d       = 10.6;   // four thin ribs reach just past the bore and crush to fit, so
+rib_w       = 0.8;    // the tube grips without a fit test
+rib_lead    = 2.0;    // ribs start this far back from the tip, to ease it in
 tube_id     = 8.3;    // the lens barrel is 7.85 across
-collar_d    = 11.6;   // stiffens the joint between tube and housing
+collar_d    = 11.0;   // stiffens the joint between tube and housing
 collar_h    = 1.5;
 
 /* [Housing] */
-wall        = 1.6;
+wall        = 1.2;    // three 0.4 mm lines
 front_t     = 1.2;    // front wall, between the camera body and the tube
-gap         = 0.25;   // clearance around the boards
+gap         = 0.35;   // clearance around the boards, allowing for prints coming out small
 lip         = 0.6;    // how far each snap lip reaches over the main board
 lip_h       = 0.8;
 
 /* [Output] */
-part        = "housing"; // [housing, fit_test]
+part        = "housing"; // [housing]
 
 $fn = 96;
 eps = 0.01;
@@ -59,6 +62,7 @@ y_out = y_in + front_t;                // outside face
 tube_len = bore_depth - tip_gap;       // how far the tube can go into the viewer
 
 assert(tube_od < bore_d, "Tube is wider than the viewer's bore");
+assert(rib_d - bore_d < 0.3, "Ribs are too tight to push in");
 assert(tube_id > 7.85 + 0.2, "The lens barrel won't fit in the tube");
 assert(lens[0] + collar_d / 2 <= in_x1 + wall + eps, "Collar overhangs the housing");
 echo(str("Housing ", in_x1 - in_x0 + 2 * wall, " x ", in_z1 - in_z0 + 2 * wall, " x ", y_out - y0,
@@ -74,6 +78,9 @@ module housing() {
             translate([lens[0], y_out - eps, lens[1]]) rotate([-90, 0, 0]) {
                 cylinder(d1 = collar_d, d2 = tube_od, h = collar_h);
                 cylinder(d = tube_od, h = collar_h + tube_len);
+                for (a = [45 : 90 : 315]) rotate([0, 0, a])
+                    translate([tube_od / 2 - 0.3, -rib_w / 2, collar_h])
+                        cube([(rib_d - tube_od) / 2 + 0.3, rib_w, tube_len - rib_lead]);
             }
         }
         // the board's pocket, open at the back
@@ -98,19 +105,5 @@ module housing() {
                 polygon([[0, 0], [0, lip_h], [-side[1] * lip, lip_h]]);
 }
 
-// Three short rings to find the tightest size that still slides.
-module fit_test() {
-    ods = [tube_od - 0.1, tube_od, tube_od + 0.1];
-    for (i = [0 : 2])
-        translate([i * 16, 0, 0]) difference() {
-            union() {
-                cylinder(d = ods[i], h = 8);
-                translate([0, 0, 8]) cylinder(d = 14, h = 1 + i);   // ring height shows the size: 1, 2 or 3 mm
-            }
-            translate([0, 0, -eps]) cylinder(d = tube_id, h = 12 + 2 * eps);
-        }
-}
-
 // The model's y (toward the door) becomes print z, with the open back on the bed.
 if (part == "housing") rotate([90, 0, 0]) translate([0, -y0, 0]) housing();
-else if (part == "fit_test") fit_test();
