@@ -16,9 +16,11 @@ tip_gap     = 2.0;    // tube stops this far short of the glass
 tube_od     = 10.3;   // use the size that worked from the fit test
 wall        = 1.0;    // tube wall
 
-/* [Camera module - estimated from a photo, MEASURE] */
-cam_w       = 10.4;   // square module width, with clearance
-cup_depth   = 3.0;    // how far the cup grips the module
+/* [Camera module - from Seeed's 3D model of the XIAO ESP32S3 Sense] */
+// Body 8.0 x 8.0 x 2.1 mm. Lens barrel 7.85 mm across for 1.9 mm, then 6.3 mm,
+// 3.7 mm tall in all, centred on the body.
+cam_w       = 8.3;    // square module width (8.0), with clearance
+cup_depth   = 1.8;    // how far the cup grips the module: less than the body's 2.1, so it clears the board
 cup_wall    = 1.4;
 floor_t     = 1.2;    // between the module and the lens opening
 flex_notch  = 8.0;    // gap in the wall on the ribbon cable's side (0 = none)
@@ -36,6 +38,7 @@ cone_h   = (cup_w - tube_od) / 2;   // 45 degrees, from the tube out to the cup'
 
 assert(tube_od < bore_d, "Tube is wider than the viewer's bore");
 assert(tube_id > 6, "Tube bore is too small to see through");
+assert(tube_id > 7.85, "The lens barrel won't fit through the floor");
 echo(str("Tube ", tube_od, " x ", tube_len, " mm, opening ", tube_id, " mm, cup ", cup_w, " mm"));
 
 module mount() {

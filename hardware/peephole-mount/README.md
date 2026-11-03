@@ -8,7 +8,8 @@ grips the XIAO's square camera module, with the board behind it and USB pointing
 1. Print `stl/fit_test.stl`. The three rings are 10.2, 10.3 and 10.4 mm: the thinnest
    collar is 10.2 and the thickest is 10.4. Find the tightest one that still slides.
 2. If it isn't 10.3, change `tube_od` in `peephole_mount.scad` and re-export.
-3. Measure the camera module and set `cam_w`. It's only estimated from a photo so far.
+3. `cam_w` comes from Seeed's 3D model: the module is 8.0 mm square. Check yours with
+   calipers, since the OV3660 camera may differ slightly from the modelled OV2640.
 4. Print `stl/mount.stl` with the tube end on the bed. No supports. PETG, 0.12 mm
    layers, 3+ walls.
 
