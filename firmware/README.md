@@ -4,7 +4,7 @@ You can test everything before building the hardware. Two firmware builds:
 
 | Build | Board | Use |
 |---|---|---|
-| `xiao_sense` | XIAO ESP32S3 Sense | The door unit: camera and mic always live, doorbell detection on the board, updates over WiFi |
+| `xiao_sense` | XIAO ESP32S3 Sense | The door unit: mic always live, camera on whenever someone watches, doorbell detection on the board, updates over WiFi |
 | `esp32cam` | AI-Thinker ESP32-CAM | Video only, it has no mic. Train on your computer's mic instead |
 
 Before the first XIAO flash, create the token that protects the mic and updates:
@@ -68,7 +68,7 @@ Open `http://door-cam.local/`, or the IP address from the boot log.
 |---|---|
 | `/` | Test page with the live view |
 | `/capture` | One JPEG |
-| `/status` | Signal strength, memory, uptime as JSON |
+| `/status` | Signal strength, memory, uptime, chip temperature (`chip_c`) and whether the camera is asleep, as JSON |
 | `/control?framesize=vga&quality=12&vflip=1&hmirror=0` | Change settings until the next reboot (`qvga`, `vga`, `svga`, `xga`, `hd`) |
 | `:81/stream` | MJPEG stream, up to 4 viewers at once |
 | `:82/audio?token=…` | Live 16 kHz mono PCM from the mic, up to 2 listeners. Needs the token |
@@ -76,6 +76,18 @@ Open `http://door-cam.local/`, or the IP address from the boot log.
 
 The stream has no password, so keep it on your home network and never
 port-forward it.
+
+**Heat.** The board runs warm, and the housing is PLA, which softens at about 55 °C. To
+keep it cool, the camera goes to standby 10 seconds after the last viewer leaves and
+wakes in under half a second for the next one. The camera runs at half its usual clock
+and the stream is capped at 10 frames a second. The radio saves power while nobody
+watches or listens, transmits at a quarter of full power, and the processor runs at
+160 MHz instead of 240.
+
+Measured on the chip (`chip_c`), with the board in the housing: about 42 °C and falling
+with the camera asleep, and about 64 °C streaming without a break. While motion recording
+is on, the recorder counts as a viewer, so the camera never sleeps. Turn recording off
+when you don't need it.
 
 ## 4. Record motion clips
 From the repo root:

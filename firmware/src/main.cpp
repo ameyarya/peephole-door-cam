@@ -87,7 +87,7 @@ static camera_config_t cameraConfig() {
   c.pin_href = 23;
   c.pin_pclk = 22;
 #endif
-  c.xclk_freq_hz = 20000000;
+  c.xclk_freq_hz = 10000000;  // half the usual 20 MHz: fewer frames from the sensor, and much less heat
   c.ledc_timer = LEDC_TIMER_0;
   c.ledc_channel = LEDC_CHANNEL_0;
   c.pixel_format = PIXFORMAT_JPEG;
@@ -101,6 +101,9 @@ static camera_config_t cameraConfig() {
 
 static const int MAX_STREAM_CLIENTS = 4;
 static const int MAX_CAPTURE_FAILURES = 5;
+static const uint32_t FRAME_MS = 100;        // 10 frames a second is plenty for a door, and runs cooler
+static const uint32_t CAMERA_IDLE_MS = 10000;  // the sensor sleeps this long after the last viewer leaves
+static const int WAKE_SKIP_FRAMES = 4;       // frames to drop after waking, while exposure settles
 
 static volatile uint32_t framesSent = 0;
 static volatile int streamClients = 0;
@@ -125,6 +128,7 @@ struct SharedFrame {
 static SemaphoreHandle_t frameLock;
 static SharedFrame *latestFrame = nullptr;
 static volatile int viewers = 0;
+static volatile bool cameraAsleep = false;
 
 static void releaseLocked(SharedFrame *frame) {
   if (frame && --frame->refs == 0) {
@@ -190,16 +194,39 @@ static void viewerRemove() {
   xSemaphoreGive(frameLock);
 }
 
-// Stops only while no one is registered as a viewer. setup() registers one for good
-// on the XIAO, so the camera stays live.
+// The OV3660 has a software standby. The ESP32-CAM's OV2640 just keeps running.
+static bool sensorSleep(bool sleep) {
+  sensor_t *s = esp_camera_sensor_get();
+  if (!s || s->id.PID != OV3660_PID) return false;
+  s->set_reg(s, 0x3008, 0x40, sleep ? 0x40 : 0x00);  // SYSTEM CTROL0, bit 6: power down
+  return true;
+}
+
+// Grabs frames only while someone is watching, at most one every FRAME_MS. With no
+// viewers for CAMERA_IDLE_MS the sensor goes to standby, which keeps the board cool.
 static void captureTask(void *) {
   uint32_t seq = 0;
-  int failures = 0;
+  int failures = 0, skip = 0;
+  uint32_t lastViewer = millis(), lastGrab = 0;
   for (;;) {
     if (viewers <= 0 || updating) {
+      if (!cameraAsleep && viewers <= 0 && millis() - lastViewer > CAMERA_IDLE_MS && sensorSleep(true)) {
+        cameraAsleep = true;
+        Serial.println("No viewers: camera asleep");
+      }
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
+    lastViewer = millis();
+    if (cameraAsleep) {
+      sensorSleep(false);
+      cameraAsleep = false;
+      skip = WAKE_SKIP_FRAMES;
+      failures = 0;
+    }
+    uint32_t since = millis() - lastGrab;
+    if (since < FRAME_MS) vTaskDelay(pdMS_TO_TICKS(FRAME_MS - since));
+    lastGrab = millis();
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
       if (++failures >= MAX_CAPTURE_FAILURES) {
@@ -210,6 +237,11 @@ static void captureTask(void *) {
       continue;
     }
     failures = 0;
+    if (skip > 0) {  // stale or still settling after standby
+      skip--;
+      esp_camera_fb_return(fb);
+      continue;
+    }
     SharedFrame *frame = (SharedFrame *)heap_caps_malloc(sizeof(SharedFrame), MALLOC_CAP_SPIRAM);
     uint8_t *buf = (uint8_t *)heap_caps_malloc(fb->len, MALLOC_CAP_SPIRAM);
     if (!frame || !buf) {
@@ -276,12 +308,14 @@ static esp_err_t statusHandler(httpd_req_t *req) {
   snprintf(json, sizeof(json),
            "{\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"free_heap\":%u,"
            "\"free_psram\":%u,\"frames_sent\":%lu,\"stream_clients\":%d,\"rings\":%lu,"
-           "\"framesize\":%d,\"quality\":%d,\"running\":\"%s\",\"built\":\"%s\"}",
+           "\"framesize\":%d,\"quality\":%d,\"running\":\"%s\",\"built\":\"%s\","
+           "\"camera_asleep\":%s,\"chip_c\":%.0f}",
            WiFi.localIP().toString().c_str(), WiFi.RSSI(),
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (unsigned)ESP.getFreePsram(), (unsigned long)framesSent,
            streamClients, (unsigned long)rings, s ? s->status.framesize : -1,
-           s ? s->status.quality : -1, runningPartition(), __DATE__ " " __TIME__);
+           s ? s->status.quality : -1, runningPartition(), __DATE__ " " __TIME__,
+           cameraAsleep ? "true" : "false", temperatureRead());
 #ifdef CHIME_DETECT
   // Numbers about the last bell-like sound. No audio.
   ChimeDetector::Strike st;
@@ -624,6 +658,7 @@ static bool startServers() {
 }
 
 void setup() {
+  setCpuFrequencyMhz(160);  // down from 240: enough for the stream and the chime detector, and cooler
   Serial.begin(115200);
   Serial.println("\nDoor cam starting");
 #ifdef ROLLBACK_TEST  // a deliberately bad firmware, for testing that rollback works
@@ -642,7 +677,6 @@ void setup() {
   frameLock = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(captureTask, "capture", 4096, nullptr, 6, nullptr, 1);
 #ifdef BOARD_XIAO_S3_SENSE
-  viewerAdd();  // keeps the camera live with nobody watching
   // The OV3660 is mirrored natively.
   esp_camera_sensor_get()->set_hmirror(esp_camera_sensor_get(), 1);
 #endif
@@ -656,7 +690,7 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
-  WiFi.setSleep(false);  // power save causes stutter on the stream
+  WiFi.setSleep(true);  // radio power save while idle; loop() turns it off for viewers
 
   // Credentials live in the board's flash, set from a phone on first boot.
   WiFiManager manager;
@@ -666,6 +700,7 @@ void setup() {
     ESP.restart();
   }
 
+  WiFi.setTxPower(WIFI_POWER_11dBm);  // a quarter of full power; plenty indoors, and less heat
   if (MDNS.begin(HOSTNAME)) MDNS.addService("http", "tcp", 80);
   if (!startServers()) {
     Serial.println("Could not start web servers. Restarting.");
@@ -694,6 +729,16 @@ void loop() {
   } else if (millis() - lostSince > 60000) {
     Serial.println("WiFi lost for 60s. Restarting.");
     ESP.restart();
+  }
+  // Radio power save makes the stream stutter, so only use it while nobody is watching or listening.
+  bool busy = streamClients > 0;
+#ifdef AUDIO_STREAM
+  busy = busy || audioClients > 0;
+#endif
+  static bool radioBusy = false;
+  if (busy != radioBusy) {
+    radioBusy = busy;
+    WiFi.setSleep(!busy);
   }
   delay(100);
 }

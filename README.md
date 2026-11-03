@@ -31,7 +31,7 @@ Models are parametric OpenSCAD. Change values in the Customizer and re-export.
 - [x] Sleeve and enclosure designed (door: 34mm thick, ~13mm hole)
 - [ ] Test print and fit (the peephole mount is not fit-tested yet)
 - [ ] Check camera module and XIAO dimensions against the models
-- [x] XIAO firmware: camera and mic always live, up to 4 viewers and 2 token-protected listeners (tested on a board)
+- [x] XIAO firmware: mic always live, camera asleep when nobody watches, up to 4 viewers and 2 token-protected listeners (tested on a board)
 - [x] Updates over WiFi, with automatic rollback (both tested on a board)
 - [x] Motion recorder (tested on a live stream)
 - [x] Chime trainer, including training from one recording (tested in simulation only)
