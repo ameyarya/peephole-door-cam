@@ -11,8 +11,9 @@ nothing stuck to the door.
   over the outside of the back, and two bars on it hold the board down.
 - **Bottom:** USB-C plug, plus room for a microSD card.
 - **Top:** a slot for the WiFi antenna's cable.
-- **Front:** the camera comes about 2.4 mm forward on its flex cable into a square
-  8.2 mm socket at the base of the tube, which holds it square and centred. The socket's
+- **Front:** the tube is in the middle of the housing's face. The camera comes off its
+  place on the board on its flex cable, about 7 mm toward the antenna end and 2.4 mm
+  forward, into a square 8.2 mm socket at the base of the tube, which holds it square and centred. The socket's
   corners stop it, and the lens goes on into the tube.
 
 Housing 24.8 × 20.9 × 15 mm, lid 24.8 × 24.4 × 4.2 mm, about 4 g of plastic in all. The tube is 10.1 mm across, with four
@@ -27,7 +28,7 @@ touches the plastic, at the socket's stop, and the lid clears the board by 0.15 
 | File | What changed |
 |---|---|
 | `stl/housing_v1.stl` | First print. The tube's ribs, board pocket, USB and antenna slots fit. The round opening didn't hold the camera, and the board fell out of the open back |
-| `stl/housing_v2.stl`, `stl/lid_v2.stl` | Square socket for the camera at the base of the tube, and a snap-on lid. Not printed yet |
+| `stl/housing_v2.stl`, `stl/lid_v2.stl` | Tube moved to the middle of the housing, a square socket for the camera at its base, and a snap-on lid. Not printed yet |
 
 ## Print
 Print `stl/housing_v2.stl` with the open back on the bed, tube up, and `stl/lid_v2.stl`
@@ -39,7 +40,8 @@ too tight, lower it.
 
 The camera may differ slightly from Seeed's model, which shows the older OV2640. If
 the board is tight, raise `gap`. If the camera won't go into its socket, raise `cam_fit`.
-If the lid is too hard to snap on, lower `snap`.
+If the lid is too hard to snap on, lower `snap`. If the camera's flex won't reach the
+socket, move the tube back toward the camera with `tube_off` (`[6.9, -0.6]` is where v1 had it).
 
 ## Assemble
 Ease the camera forward off the board on its flex and press it into the square socket,

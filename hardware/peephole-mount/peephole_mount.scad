@@ -3,8 +3,9 @@
 // with nothing stuck to the door. Slide it in and out to find the best picture.
 //
 // The board goes in from the open back and snaps past two small lips, then a lid
-// snaps over the back. The camera comes forward on its flex cable into a square
-// socket at the base of the tube, which holds it square and centred.
+// snaps over the back. The tube is in the middle of the housing's face. The camera
+// comes off its place on the board on its flex cable into a square socket at the
+// base of the tube, which holds it square and centred.
 // USB-C points down, and the WiFi antenna's cable leaves through the top.
 //
 // Board positions come from Seeed's 3D model of the XIAO ESP32S3 Sense, in its own
@@ -32,6 +33,9 @@ cam_w       = 8.0;    // the camera's square body
 cam_h       = 2.1;
 cam_fit     = 8.2;    // the socket, a snug push fit. Raise it if the camera won't go in
 cam_d       = 2.0;    // socket depth, a little less than the body so it can't rattle
+tube_off    = [0, 0]; // tube position from the middle of the housing's face, along and across.
+                      // The camera follows it on its flex; move it back toward [6.9, -0.6]
+                      // (the camera's place on the board) if the flex won't reach
 
 /* [Housing] */
 wall        = 1.2;    // three 0.4 mm lines
@@ -72,6 +76,7 @@ in_z0 = board_z[0] - gap;  in_z1 = board_z[1] + gap;
 y0    = back_y - gap - lip_h;          // the open back, on the bed
 y_in  = cam_y + gap;                   // inside face of the front wall
 y_out = y_in + front_t;                // outside face
+tube_at = [(in_x0 + in_x1) / 2 + tube_off[0], (in_z0 + in_z1) / 2 + tube_off[1]];
 boss_w = cam_fit + 2 * wall;           // square boss around the camera socket
 y_tube = y_in + cam_d + front_t;       // base of the tube, on top of the boss
 cam_shift = y_in - (cam_y - cam_h);    // how far the camera comes forward off the board
@@ -82,9 +87,12 @@ assert(rib_d - bore_d < 0.3, "Ribs are too tight to push in");
 assert(tube_id > 7.85 + 0.2, "The lens barrel won't fit in the tube");
 assert(cam_fit > cam_w, "The camera won't fit in its socket");
 assert(cam_d < cam_h, "The socket is deeper than the camera");
-assert(lens[0] + boss_w / 2 <= in_x1 + wall + eps, "The boss overhangs the housing");
+assert(abs(tube_at[0] - (in_x0 + in_x1) / 2) + boss_w / 2 <= (in_x1 - in_x0) / 2 + wall + eps &&
+       abs(tube_at[1] - (in_z0 + in_z1) / 2) + boss_w / 2 <= (in_z1 - in_z0) / 2 + wall + eps,
+       "The boss overhangs the housing");
 echo(str("Housing ", in_x1 - in_x0 + 2 * wall, " x ", in_z1 - in_z0 + 2 * wall, " x ", y_tube - y0,
-         " mm, tube ", tube_od, " x ", tube_len, " mm, camera ", cam_shift, " mm forward, lens ",
+         " mm, tube ", tube_od, " x ", tube_len, " mm, camera ", cam_shift, " mm forward and ",
+         tube_at - lens, " across, lens ",
          lens_top + cam_shift - y_tube, " mm into the tube"));
 
 module housing() {
@@ -94,9 +102,9 @@ module housing() {
             translate([in_x0 - wall, y0, in_z0 - wall])
                 cube([in_x1 - in_x0 + 2 * wall, y_out - y0, in_z1 - in_z0 + 2 * wall]);
             // square boss for the camera socket, then a taper and the tube, on the lens axis
-            translate([lens[0] - boss_w / 2, y_out - eps, lens[1] - boss_w / 2])
+            translate([tube_at[0] - boss_w / 2, y_out - eps, tube_at[1] - boss_w / 2])
                 cube([boss_w, y_tube - y_out + eps, boss_w]);
-            translate([lens[0], y_tube - eps, lens[1]]) rotate([-90, 0, 0]) {
+            translate([tube_at[0], y_tube - eps, tube_at[1]]) rotate([-90, 0, 0]) {
                 cylinder(d1 = boss_w, d2 = tube_od, h = collar_h);
                 cylinder(d = tube_od, h = collar_h + tube_len);
                 for (a = [45 : 90 : 315]) rotate([0, 0, a])
@@ -107,10 +115,10 @@ module housing() {
         // the board's pocket, open at the back
         translate([in_x0, y0 - eps, in_z0]) cube([in_x1 - in_x0, y_in - y0 + eps, in_z1 - in_z0]);
         // the camera's square socket. Its corners stop the camera; the lens goes on through
-        translate([lens[0] - cam_fit / 2, y_in - eps, lens[1] - cam_fit / 2])
+        translate([tube_at[0] - cam_fit / 2, y_in - eps, tube_at[1] - cam_fit / 2])
             cube([cam_fit, cam_d + eps, cam_fit]);
         // the view: through the front and down the tube
-        translate([lens[0], y_in - eps, lens[1]]) rotate([-90, 0, 0])
+        translate([tube_at[0], y_in - eps, tube_at[1]]) rotate([-90, 0, 0])
             cylinder(d = tube_id, h = y_tube - y_in + collar_h + tube_len + 3 * eps);
         // USB-C plug and microSD card, through the bottom wall, open to the back
         translate([in_x1 - eps, y0 - eps, (usb[0] + usb[1]) / 2 - plug_w / 2])
