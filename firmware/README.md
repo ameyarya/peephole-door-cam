@@ -94,6 +94,11 @@ link it prints when it starts (`--serve-port 0` turns that off). Paste the link 
 the page's Settings with the Mac's real address. Clips appear under the live view when
 you open the door camera, where you can play or delete them. Deleting is permanent. If it triggers too easily, raise `--sensitivity`, for example to `0.03`.
 
+**Motion recording** in the page's Settings turns recording off and on. While it's off, the
+recorder lets go of the camera and saves nothing, and it stays off after a restart. When you
+open the page, it shows one notice if there's new motion since your last visit, for example
+"New motion at Front door 2 mins ago". Tap it to see the recordings.
+
 ## 5. Train on your doorbell
 Train with the mic that will do the listening. Put the XIAO where it will live (a USB power bank works), then from the repo
 root:

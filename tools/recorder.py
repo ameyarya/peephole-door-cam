@@ -109,6 +109,19 @@ class Recorder:
         self.saving = False
         self.motion_began = 0.0
         self.clips: list[Path] = []
+        self.paused_file = self.out_dir / ".paused"
+
+    @property
+    def paused(self) -> bool:
+        """Recording turned off from the Smart Home page. Kept in a file, so it survives restarts."""
+        return self.paused_file.exists()
+
+    def set_paused(self, paused: bool) -> None:
+        if paused:
+            self.out_dir.mkdir(parents=True, exist_ok=True)
+            self.paused_file.touch()
+        else:
+            self.paused_file.unlink(missing_ok=True)
 
     @property
     def recording(self) -> bool:
@@ -117,14 +130,19 @@ class Recorder:
     def status(self, now: float | None = None) -> dict:
         """What's happening right now: idle, recording, or saving a finished clip."""
         now = time.time() if now is None else now
+        on = {"recording_on": not self.paused}
         if self.saving:
-            return {"state": "saving", "seconds": 0}
+            return {"state": "saving", "seconds": 0, **on}
         if self.recording:
-            return {"state": "recording", "seconds": round(now - self.motion_began)}
-        return {"state": "idle", "seconds": 0}
+            return {"state": "recording", "seconds": round(now - self.motion_began), **on}
+        return {"state": "off" if self.paused else "idle", "seconds": 0, **on}
 
     def feed(self, jpeg: bytes, now: float | None = None) -> None:
         now = time.time() if now is None else now
+        if self.paused:
+            self.pre_roll.clear()
+            self.finish()
+            return
         motion = self.detector.update(jpeg)
         if motion:
             self.last_motion = now
@@ -249,9 +267,10 @@ def delete_clip(out_dir: Path, clip: str) -> bool:
     return True
 
 
-def clip_server(out_dir: Path, port: int, status=None) -> ThreadingHTTPServer:
+def clip_server(out_dir: Path, port: int, status=None, set_paused=None) -> ThreadingHTTPServer:
     out_dir = Path(out_dir)
     status = status or (lambda: {"state": "idle", "seconds": 0})
+    set_paused = set_paused or (lambda paused: None)
     token = clips_token(out_dir)
 
     class Handler(BaseHTTPRequestHandler):
@@ -274,7 +293,7 @@ def clip_server(out_dir: Path, port: int, status=None) -> ThreadingHTTPServer:
             self.do_GET()
 
         def do_OPTIONS(self):   # the browser asks before a cross-site DELETE
-            self.answer(204, extra=[("Access-Control-Allow-Methods", "GET, DELETE"), ("Access-Control-Max-Age", "600")])
+            self.answer(204, extra=[("Access-Control-Allow-Methods", "GET, POST, DELETE"), ("Access-Control-Max-Age", "600")])
 
         def do_DELETE(self):
             path = self.path.split("?")[0].lstrip("/")
@@ -283,6 +302,18 @@ def clip_server(out_dir: Path, port: int, status=None) -> ThreadingHTTPServer:
                 return self.answer(404)
             print(f"Deleted {rest}", flush=True)
             self.answer(204)
+
+        def do_POST(self):   # turns recording on or off: the body is "on" or "off"
+            path = self.path.split("?")[0].lstrip("/")
+            given, _, rest = path.partition("/")
+            body = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 16)).decode(errors="replace").strip()
+            if not hmac.compare_digest(given.encode(), token.encode()) or rest != "recording":
+                return self.answer(404)
+            if body not in ("on", "off"):
+                return self.answer(400, b"Send on or off")
+            set_paused(body == "off")
+            print(f"Recording turned {body}", flush=True)
+            self.answer(200, json.dumps(status()).encode(), "application/json")
 
         def do_GET(self):
             path = self.path.split("?")[0].lstrip("/")
@@ -332,7 +363,15 @@ def run(url: str, recorder: Recorder) -> None:
                 print(f"Connected to {url}", flush=True)
                 delay = 1
                 for jpeg in iter_jpegs(response.iter_content(chunk_size=8192)):
+                    if recorder.paused:
+                        break
                     recorder.feed(jpeg)
+            if recorder.paused:   # let go of the camera until recording is turned back on
+                recorder.finish()
+                print("Recording is off", flush=True)
+                while recorder.paused:
+                    time.sleep(1)
+                continue
             print("Stream ended", flush=True)
         except requests.RequestException as err:
             print(f"Stream error: {err}. Retrying in {delay}s", flush=True)
@@ -358,7 +397,7 @@ def main() -> None:
         raise SystemExit("ffmpeg not found. Install it with: brew install ffmpeg")
     recorder = Recorder(args.out, args.pre, args.post, args.max, MotionDetector(args.sensitivity))
     if args.serve_port:
-        clip_server(args.out, args.serve_port, recorder.status)
+        clip_server(args.out, args.serve_port, recorder.status, recorder.set_paused)
         print(f"Clips link for Smart Home's Settings: http://<this Mac's address>:{args.serve_port}/{clips_token(args.out)}", flush=True)
     try:
         run(args.url, recorder)

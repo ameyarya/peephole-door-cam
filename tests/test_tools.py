@@ -384,7 +384,7 @@ def test_videos_support_the_range_requests_phones_use(served):
 def test_deleting_a_clip_removes_it_for_good(served):
     requests, base, token, root = served
     url = f"{base}/{token}/2026-11-02/101500.mp4"
-    assert requests.options(url).headers["Access-Control-Allow-Methods"] == "GET, DELETE"
+    assert requests.options(url).headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE"
     assert requests.delete(url).status_code == 204
     assert not (root / "2026-11-02/101500.mp4").exists() and not (root / "2026-11-02/101500.jpg").exists()
     assert "101500" not in (root / "events.jsonl").read_text()
@@ -423,7 +423,7 @@ def test_status_follows_a_recording_from_motion_to_saved(tmp_path):
     url = f"http://127.0.0.1:{server.server_address[1]}/{recorder.clips_token(tmp_path)}/status.json"
     try:
         first = requests.get(url).json()
-        assert first == {"state": "idle", "seconds": 0, "newest": None}
+        assert first == {"state": "idle", "seconds": 0, "recording_on": True, "newest": None}
         t = 4_000_000.0
         for _ in range(20):
             rec.feed(frame(), t)
@@ -433,7 +433,7 @@ def test_status_follows_a_recording_from_motion_to_saved(tmp_path):
             t += 0.1
         assert rec.recording
         during = rec.status(now=rec.motion_began + 3)
-        assert during == {"state": "recording", "seconds": 3}
+        assert during == {"state": "recording", "seconds": 3, "recording_on": True}
 
         seen = {}
         real_run = recorder.subprocess.run
@@ -450,5 +450,32 @@ def test_status_follows_a_recording_from_motion_to_saved(tmp_path):
         assert seen["while_encoding"] == "saving"
         done = requests.get(url).json()
         assert done["state"] == "idle" and done["newest"].endswith(".mp4")
+    finally:
+        server.shutdown()
+
+
+def test_recording_can_be_turned_off_from_the_page_and_stays_off(tmp_path):
+    import requests
+
+    rec = recorder.Recorder(tmp_path, pre_s=1, post_s=1)
+    server = recorder.clip_server(tmp_path, 0, rec.status, rec.set_paused)
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    url = f"{base}/{recorder.clips_token(tmp_path)}/recording"
+    try:
+        assert requests.post(f"{base}/wrong/recording", data="off").status_code == 404
+        assert requests.post(url, data="maybe").status_code == 400
+        assert not rec.paused
+
+        off = requests.post(url, data="off")
+        assert off.status_code == 200 and off.json()["state"] == "off" and not off.json()["recording_on"]
+        t = 5_000_000.0
+        for x in [None] * 10 + list(range(60, 240, 18)):
+            rec.feed(frame() if x is None else frame(x), t)
+            t += 0.1
+        assert not rec.recording and not rec.pre_roll
+        assert recorder.Recorder(tmp_path).paused   # survives a restart
+
+        assert requests.post(url, data="on").json()["recording_on"]
+        assert not rec.paused
     finally:
         server.shutdown()
