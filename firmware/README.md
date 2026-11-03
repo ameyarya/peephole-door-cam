@@ -84,8 +84,15 @@ From the repo root:
 uv run tools/recorder.py
 ```
 
-Clips go to `recordings/YYYY-MM-DD/`, which git ignores. Walk past the camera to
-test it. If it triggers too easily, raise `--sensitivity`, for example to `0.03`.
+It watches all the time but only saves clips when something moves, with 10 seconds
+from before and 10 seconds after (`--pre` and `--post`). It only runs while this
+computer is awake. Clips go to `recordings/YYYY-MM-DD/`, which git ignores. Walk past
+the camera to test it.
+
+It also serves the clips to your network for the Smart Home page, through a private
+link it prints when it starts (`--serve-port 0` turns that off). Paste the link into
+the page's Settings with the Mac's real address. Clips appear under the live view when
+you open the door camera, where you can play or delete them. Deleting is permanent. If it triggers too easily, raise `--sensitivity`, for example to `0.03`.
 
 ## 5. Train on your doorbell
 Train with the mic that will do the listening. Put the XIAO where it will live (a USB power bank works), then from the repo

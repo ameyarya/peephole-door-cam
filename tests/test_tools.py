@@ -88,6 +88,26 @@ def test_recorder_saves_one_clip_with_pre_and_post_roll(tmp_path):
     assert event["type"] == "motion" and event["clip"].endswith(".mp4")
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_default_clip_keeps_10_seconds_each_side_and_nothing_else(tmp_path):
+    rec = recorder.Recorder(tmp_path)
+    t, fps = 3_000_000.0, 10
+    still = frame()
+    for _ in range(30 * fps):             # 30s of nothing saves nothing
+        rec.feed(still, t)
+        t += 1 / fps
+    assert not rec.recording and not rec.clips and not list(tmp_path.glob("*/*.mp4"))
+    for x in range(60, 240, 6):           # 3s of someone walking past
+        rec.feed(frame(x), t)
+        t += 1 / fps
+    for _ in range(25 * fps):
+        rec.feed(still, t)
+        t += 1 / fps
+    assert len(rec.clips) == 1 and not rec.recording
+    event = json.loads((tmp_path / "events.jsonl").read_text().splitlines()[0])
+    assert 22 <= event["seconds"] <= 26   # 10 before + 3 of motion + 10 after
+
+
 def test_recorder_caps_clip_length(tmp_path):
     if not shutil.which("ffmpeg"):
         pytest.skip("needs ffmpeg")
@@ -301,3 +321,134 @@ def test_board_detector_matches_python(tmp_path):
     assert expected, "the Python detector should find the bell"
     assert len(got) == len(expected)
     assert np.allclose(got, expected, atol=0.1)
+
+
+# --- Serving clips to the Smart Home page ---
+
+def make_clip(root, day="2026-11-02", name="101500"):
+    folder = root / day
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{name}.mp4").write_bytes(bytes(range(256)) * 4)
+    (folder / f"{name}.jpg").write_bytes(b"picture")
+    with (root / "events.jsonl").open("a") as log:
+        log.write(json.dumps({"type": "motion", "start": f"{day}T10:15:00", "seconds": 23.0,
+                              "clip": f"{day}/{name}.mp4"}) + "\n")
+
+
+@pytest.fixture
+def served(tmp_path):
+    import requests
+
+    make_clip(tmp_path, name="101500")
+    make_clip(tmp_path, name="111500")
+    server = recorder.clip_server(tmp_path, 0)
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    yield requests, base, recorder.clips_token(tmp_path), tmp_path
+    server.shutdown()
+
+
+def test_clips_list_is_newest_first_and_skips_deleted(served):
+    requests, base, token, root = served
+    got = requests.get(f"{base}/{token}/clips.json")
+    assert got.headers["Access-Control-Allow-Origin"] == "*"
+    assert [c["video"] for c in got.json()] == ["2026-11-02/111500.mp4", "2026-11-02/101500.mp4"]
+    (root / "2026-11-02/111500.mp4").unlink()
+    assert [c["video"] for c in requests.get(f"{base}/{token}/clips.json").json()] == ["2026-11-02/101500.mp4"]
+
+
+def test_clips_need_the_token_and_stay_in_their_folder(served):
+    requests, base, token, root = served
+    (root / "secret.txt").write_text("private")
+    assert requests.get(f"{base}/clips.json").status_code == 404
+    assert requests.get(f"{base}/wrong/clips.json").status_code == 404
+    assert requests.get(f"{base}/wrong/2026-11-02/101500.mp4").status_code == 404
+    for path in ("secret.txt", "events.jsonl", ".clips_token", "../secret.txt", "2026-11-02/../../secret.txt"):
+        session = requests.Session()
+        prepared = requests.Request("GET", f"{base}/{token}/x").prepare()
+        prepared.url = f"{base}/{token}/{path}"
+        assert session.send(prepared).status_code == 404, path
+
+
+def test_videos_support_the_range_requests_phones_use(served):
+    requests, base, token, _ = served
+    url = f"{base}/{token}/2026-11-02/101500.mp4"
+    whole = requests.get(url)
+    assert whole.status_code == 200 and len(whole.content) == 1024 and whole.headers["Accept-Ranges"] == "bytes"
+    part = requests.get(url, headers={"Range": "bytes=0-1"})
+    assert part.status_code == 206 and part.content == bytes([0, 1]) and part.headers["Content-Range"] == "bytes 0-1/1024"
+    tail = requests.get(url, headers={"Range": "bytes=-2"})
+    assert tail.status_code == 206 and len(tail.content) == 2
+    assert requests.get(url, headers={"Range": "bytes=5000-"}).status_code == 416
+
+
+def test_deleting_a_clip_removes_it_for_good(served):
+    requests, base, token, root = served
+    url = f"{base}/{token}/2026-11-02/101500.mp4"
+    assert requests.options(url).headers["Access-Control-Allow-Methods"] == "GET, DELETE"
+    assert requests.delete(url).status_code == 204
+    assert not (root / "2026-11-02/101500.mp4").exists() and not (root / "2026-11-02/101500.jpg").exists()
+    assert "101500" not in (root / "events.jsonl").read_text()
+    assert [c["video"] for c in requests.get(f"{base}/{token}/clips.json").json()] == ["2026-11-02/111500.mp4"]
+    assert requests.delete(url).status_code == 404
+
+
+def test_deleting_needs_the_token_and_only_touches_clips(served):
+    requests, base, token, root = served
+    (root / "secret.txt").write_text("private")
+    assert requests.delete(f"{base}/wrong/2026-11-02/101500.mp4").status_code == 404
+    assert (root / "2026-11-02/101500.mp4").exists()
+    assert requests.delete(f"{base}/{token}/2026-11-02/101500.jpg").status_code == 404
+    assert (root / "2026-11-02/101500.jpg").exists()
+    for path in ("secret.txt", "events.jsonl", ".clips_token", "../secret.txt"):
+        session = requests.Session()
+        prepared = requests.Request("DELETE", f"{base}/{token}/x").prepare()
+        prepared.url = f"{base}/{token}/{path}"
+        assert session.send(prepared).status_code == 404, path
+    assert (root / "secret.txt").exists() and (root / ".clips_token").exists()
+
+
+def test_deleting_the_last_clip_of_a_day_removes_its_folder(served):
+    requests, base, token, root = served
+    make_clip(root, day="2026-11-03", name="090000")
+    assert requests.delete(f"{base}/{token}/2026-11-03/090000.mp4").status_code == 204
+    assert not (root / "2026-11-03").exists() and (root / "2026-11-02").exists()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_status_follows_a_recording_from_motion_to_saved(tmp_path):
+    import requests
+
+    rec = recorder.Recorder(tmp_path, pre_s=1, post_s=1)
+    server = recorder.clip_server(tmp_path, 0, rec.status)
+    url = f"http://127.0.0.1:{server.server_address[1]}/{recorder.clips_token(tmp_path)}/status.json"
+    try:
+        first = requests.get(url).json()
+        assert first == {"state": "idle", "seconds": 0, "newest": None}
+        t = 4_000_000.0
+        for _ in range(20):
+            rec.feed(frame(), t)
+            t += 0.1
+        for x in range(60, 240, 18):
+            rec.feed(frame(x), t)
+            t += 0.1
+        assert rec.recording
+        during = rec.status(now=rec.motion_began + 3)
+        assert during == {"state": "recording", "seconds": 3}
+
+        seen = {}
+        real_run = recorder.subprocess.run
+
+        def spying_run(*args, **kwargs):
+            seen["while_encoding"] = requests.get(url).json()["state"]
+            return real_run(*args, **kwargs)
+
+        recorder.subprocess.run = spying_run
+        try:
+            rec.finish()
+        finally:
+            recorder.subprocess.run = real_run
+        assert seen["while_encoding"] == "saving"
+        done = requests.get(url).json()
+        assert done["state"] == "idle" and done["newest"].endswith(".mp4")
+    finally:
+        server.shutdown()

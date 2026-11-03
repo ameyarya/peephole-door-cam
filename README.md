@@ -15,6 +15,7 @@ on a home server.
 ## Layout
 | Path | What |
 |---|---|
+| `hardware/peephole-mount/` | Current plan: a sliding tube that films through the existing viewer, leaving the door unchanged |
 | `hardware/peephole-sleeve/` | Clamshell sleeve that holds the camera in the door hole, plus the inside clip |
 | `hardware/enclosure/` | Box for the XIAO that sticks to the inside of the door over the sleeve |
 | `hardware/*/stl/` | Rendered STLs, ready to print |
@@ -28,7 +29,7 @@ Models are parametric OpenSCAD. Change values in the Customizer and re-export.
 
 ## Status
 - [x] Sleeve and enclosure designed (door: 34mm thick, ~13mm hole)
-- [ ] Test print and fit
+- [ ] Test print and fit (the peephole mount is not fit-tested yet)
 - [ ] Check camera module and XIAO dimensions against the models
 - [x] XIAO firmware: camera and mic always live, up to 4 viewers and 2 token-protected listeners (tested on a board)
 - [x] Updates over WiFi, with automatic rollback (both tested on a board)
