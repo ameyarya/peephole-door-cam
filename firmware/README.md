@@ -80,9 +80,9 @@ port-forward it.
 **Heat.** The board runs warm, and the housing is PLA, which softens at about 55 °C. To
 keep it cool, the camera goes to standby 10 seconds after the last viewer leaves and
 wakes in under half a second for the next one. The camera runs at half its usual clock
-and the stream is capped at 10 frames a second. The radio saves power while nobody
-watches or listens, transmits at a quarter of full power, and the processor runs at
-160 MHz instead of 240.
+and the stream is capped at 10 frames a second. The radio transmits at a quarter of full
+power, and the processor runs at 160 MHz instead of 240. The radio itself stays fully
+awake: its power save would drop the board's draw so low that many power banks switch off.
 
 Measured on the chip (`chip_c`): about 42 °C and falling
 with the camera asleep, and about 64 °C streaming without a break. While motion recording

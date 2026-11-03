@@ -690,7 +690,9 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
-  WiFi.setSleep(true);  // radio power save while idle; loop() turns it off for viewers
+  // No radio power save: it makes the stream stutter, and with the camera asleep it drops the
+  // board's draw so low that many power banks switch themselves off.
+  WiFi.setSleep(false);
 
   // Credentials live in the board's flash, set from a phone on first boot.
   WiFiManager manager;
@@ -729,16 +731,6 @@ void loop() {
   } else if (millis() - lostSince > 60000) {
     Serial.println("WiFi lost for 60s. Restarting.");
     ESP.restart();
-  }
-  // Radio power save makes the stream stutter, so only use it while nobody is watching or listening.
-  bool busy = streamClients > 0;
-#ifdef AUDIO_STREAM
-  busy = busy || audioClients > 0;
-#endif
-  static bool radioBusy = false;
-  if (busy != radioBusy) {
-    radioBusy = busy;
-    WiFi.setSleep(!busy);
   }
   delay(100);
 }
