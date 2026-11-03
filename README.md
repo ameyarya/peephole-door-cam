@@ -15,7 +15,7 @@ on a home server.
 ## Layout
 | Path | What |
 |---|---|
-| `hardware/peephole-mount/` | Current plan: a sliding tube that films through the existing viewer, leaving the door unchanged |
+| `hardware/peephole-mount/` | Current plan: a housing for the whole board, hanging from a tube that slides into the existing viewer. The door is unchanged |
 | `hardware/peephole-sleeve/` | Clamshell sleeve that holds the camera in the door hole, plus the inside clip |
 | `hardware/enclosure/` | Box for the XIAO that sticks to the inside of the door over the sleeve |
 | `hardware/*/stl/` | Rendered STLs, ready to print |

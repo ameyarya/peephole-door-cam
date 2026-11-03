@@ -1,10 +1,15 @@
-// Sliding camera mount for filming through an existing door viewer.
-// A tube friction-fits in the viewer's inner bore, and a cup on its end grips the
-// XIAO's square camera module. Slide the tube in and out to find the best picture,
-// and rotate it to level the image. Nothing is changed on the door.
+// Door unit: a housing for the whole XIAO ESP32S3 Sense, with a tube that
+// friction-fits in the door viewer's inner bore. It hangs from the tube on its own,
+// with nothing stuck to the door. Slide it in and out to find the best picture.
 //
-// Print with the tube end on the bed. No supports: a 45 degree cone joins the tube
-// to the cup. Coordinates: z = 0 is the tube's tip, +z runs toward the camera.
+// The board goes in from the open back and snaps past two small lips. The camera's
+// lens barrel sits in the tube's opening, which centres it.
+// USB-C points down, and the WiFi antenna's cable leaves through the top.
+//
+// Board positions come from Seeed's 3D model of the XIAO ESP32S3 Sense, in its own
+// coordinates: x runs along the board (USB at +x, which is down), y runs from the
+// back of the main board toward the door, z runs across the board.
+// Print with the open back on the bed. No supports: the front bridges across.
 // All dimensions in mm.
 
 /* [Viewer - measured] */
@@ -14,54 +19,83 @@ tip_gap     = 2.0;    // tube stops this far short of the glass
 
 /* [Tube] */
 tube_od     = 10.3;   // use the size that worked from the fit test
-wall        = 1.0;    // tube wall
+tube_id     = 8.3;    // the lens barrel is 7.85 across
+collar_d    = 11.6;   // stiffens the joint between tube and housing
+collar_h    = 1.5;
 
-/* [Camera module - from Seeed's 3D model of the XIAO ESP32S3 Sense] */
-// Body 8.0 x 8.0 x 2.1 mm. Lens barrel 7.85 mm across for 1.9 mm, then 6.3 mm,
-// 3.7 mm tall in all, centred on the body.
-cam_w       = 8.3;    // square module width (8.0), with clearance
-cup_depth   = 1.8;    // how far the cup grips the module: less than the body's 2.1, so it clears the board
-cup_wall    = 1.4;
-floor_t     = 1.2;    // between the module and the lens opening
-flex_notch  = 8.0;    // gap in the wall on the ribbon cable's side (0 = none)
+/* [Housing] */
+wall        = 1.6;
+front_t     = 1.2;    // front wall, between the camera body and the tube
+gap         = 0.25;   // clearance around the boards
+lip         = 0.6;    // how far each snap lip reaches over the main board
+lip_h       = 0.8;
 
 /* [Output] */
-part        = "mount"; // [mount, fit_test]
+part        = "housing"; // [housing, fit_test]
 
 $fn = 96;
 eps = 0.01;
 
-tube_id  = tube_od - 2 * wall;
-tube_len = bore_depth - tip_gap;
-cup_w    = cam_w + 2 * cup_wall;
-cone_h   = (cup_w - tube_od) / 2;   // 45 degrees, from the tube out to the cup's width
+// ---- the board, from Seeed's 3D model ----
+board_x  = [-8.97, 12.75];   // antenna end of the expansion board to the camera's far edge
+board_z  = [-15.00, 2.78];   // main board, across
+back_y   = -0.25;            // back face of the main board
+cam_y    = 10.05;            // front face of the camera's square body
+lens     = [8.75, -6.75];    // lens axis, x and z
+lens_top = 13.71;
+usb      = [-10.59, -1.65];  // USB-C port, across (z), on the +x edge
+usb_y    = 4.21;             // the port's front face
+ufl      = [-12.39, -9.29];  // antenna socket, across (z), at the -x end
+sd       = [-12.52, -1.34];  // microSD card, across (z): it sticks out past the +x edge
+sd_y     = 8.25;             // the card's front face
+plug_w   = 13.0;             // a USB-C plug's moulding is about 12 x 7
+plug_d   = 7.0;
+
+in_x0 = board_x[0] - gap;  in_x1 = board_x[1] + gap;
+in_z0 = board_z[0] - gap;  in_z1 = board_z[1] + gap;
+y0    = back_y - gap - lip_h;          // the open back, on the bed
+y_in  = cam_y + gap;                   // inside face of the front wall
+y_out = y_in + front_t;                // outside face
+tube_len = bore_depth - tip_gap;       // how far the tube can go into the viewer
 
 assert(tube_od < bore_d, "Tube is wider than the viewer's bore");
-assert(tube_id > 6, "Tube bore is too small to see through");
-assert(tube_id > 7.85, "The lens barrel won't fit through the floor");
-echo(str("Tube ", tube_od, " x ", tube_len, " mm, opening ", tube_id, " mm, cup ", cup_w, " mm"));
+assert(tube_id > 7.85 + 0.2, "The lens barrel won't fit in the tube");
+assert(lens[0] + collar_d / 2 <= in_x1 + wall + eps, "Collar overhangs the housing");
+echo(str("Housing ", in_x1 - in_x0 + 2 * wall, " x ", in_z1 - in_z0 + 2 * wall, " x ", y_out - y0,
+         " mm, tube ", tube_od, " x ", tube_len, " mm, lens ", lens_top - y_out, " mm into the tube"));
 
-module mount() {
+module housing() {
     difference() {
         union() {
-            cylinder(d = tube_od, h = tube_len);
-            hull() {
-                translate([0, 0, tube_len - eps]) cylinder(d = tube_od, h = eps);
-                translate([-cup_w / 2, -cup_w / 2, tube_len + cone_h]) cube([cup_w, cup_w, eps]);
+            // shell
+            translate([in_x0 - wall, y0, in_z0 - wall])
+                cube([in_x1 - in_x0 + 2 * wall, y_out - y0, in_z1 - in_z0 + 2 * wall]);
+            // collar and tube, on the lens axis
+            translate([lens[0], y_out - eps, lens[1]]) rotate([-90, 0, 0]) {
+                cylinder(d1 = collar_d, d2 = tube_od, h = collar_h);
+                cylinder(d = tube_od, h = collar_h + tube_len);
             }
-            translate([-cup_w / 2, -cup_w / 2, tube_len + cone_h])
-                cube([cup_w, cup_w, floor_t + cup_depth]);
         }
-        // the view through the middle
-        translate([0, 0, -eps]) cylinder(d = tube_id, h = tube_len + cone_h + floor_t + 2 * eps);
-        // the camera module's pocket
-        translate([-cam_w / 2, -cam_w / 2, tube_len + cone_h + floor_t])
-            cube([cam_w, cam_w, cup_depth + eps]);
-        // room for the ribbon cable
-        if (flex_notch > 0)
-            translate([cam_w / 2 - eps, -flex_notch / 2, tube_len + cone_h + floor_t])
-                cube([cup_wall + 2 * eps, flex_notch, cup_depth + eps]);
+        // the board's pocket, open at the back
+        translate([in_x0, y0 - eps, in_z0]) cube([in_x1 - in_x0, y_in - y0 + eps, in_z1 - in_z0]);
+        // the view: through the front and down the tube
+        translate([lens[0], y_in - eps, lens[1]]) rotate([-90, 0, 0])
+            cylinder(d = tube_id, h = front_t + collar_h + tube_len + 3 * eps);
+        // USB-C plug and microSD card, through the bottom wall, open to the back
+        translate([in_x1 - eps, y0 - eps, (usb[0] + usb[1]) / 2 - plug_w / 2])
+            cube([wall + 2 * eps, usb_y + plug_d / 2 - y0, plug_w]);
+        translate([in_x1 - eps, y0 - eps, sd[0] - gap])
+            cube([wall + 2 * eps, sd_y + gap - y0, sd[1] - sd[0] + 2 * gap]);
+        // antenna cable, through the top wall, open to the back
+        translate([in_x0 - wall - eps, y0 - eps, ufl[0] - 0.5])
+            cube([wall + 2 * eps, 3.5 - y0, ufl[1] - ufl[0] + 1]);
     }
+    // Snap lips along the two long sides. They lean in as they rise, so they print
+    // without support, and their flat tops hold the back of the main board.
+    for (side = [[in_z0, 1], [in_z1, -1]])
+        translate([in_x0, y0, side[0]]) rotate([0, 90, 0])
+            linear_extrude(in_x1 - in_x0)
+                polygon([[0, 0], [0, lip_h], [-side[1] * lip, lip_h]]);
 }
 
 // Three short rings to find the tightest size that still slides.
@@ -77,5 +111,6 @@ module fit_test() {
         }
 }
 
-if (part == "mount") mount();
+// The model's y (toward the door) becomes print z, with the open back on the bed.
+if (part == "housing") rotate([90, 0, 0]) translate([0, -y0, 0]) housing();
 else if (part == "fit_test") fit_test();
